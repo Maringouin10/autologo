@@ -10,9 +10,12 @@ from datetime import timedelta
 
 from flask import (Flask, abort, flash, jsonify, redirect, render_template,
                     request, send_file, session, url_for)
+from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from . import config, meshwork as mw, store
+
+_HTML_ROUTES = {"/", "/login", "/logout"}
 
 logging.basicConfig(level=logging.INFO,
                      format="%(asctime)s %(levelname)s %(name)s | %(message)s")
@@ -37,6 +40,22 @@ def login_required(view):
             return redirect(url_for("login", next=request.path))
         return view(*args, **kwargs)
     return wrapper
+
+
+@app.errorhandler(Exception)
+def handle_error(exc):
+    """Every route except the plain HTML pages is fetch()'d by the
+    frontend and expects JSON back — an uncaught exception used to fall
+    through to Flask's default HTML error page, which broke the browser's
+    `res.json()` with a cryptic "Unexpected token '<'" instead of showing
+    the real error."""
+    if request.path in _HTML_ROUTES:
+        raise exc
+    code = exc.code if isinstance(exc, HTTPException) else 500
+    message = exc.description if isinstance(exc, HTTPException) else str(exc)
+    if code >= 500:
+        log.exception("Unhandled error on %s", request.path)
+    return jsonify({"error": message}), code
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -144,16 +163,16 @@ def upload_logo():
     f.save(str(sess.logo_path))
     sess.invalidate_logo()
     try:
-        path2d = sess.path2d()
+        polygons = sess.logo_polygons()
     except mw.MeshError as exc:
         sess.logo_path.unlink(missing_ok=True)
         return _err(exc)
 
-    bounds = path2d.bounds
+    minx, miny, maxx, maxy = mw.logo_bounds(polygons)
     return jsonify({
         "ok": True,
-        "logo_bounds": {"width": round(float(bounds[1][0] - bounds[0][0]), 2),
-                         "height": round(float(bounds[1][1] - bounds[0][1]), 2)},
+        "logo_bounds": {"width": round(float(maxx - minx), 2),
+                         "height": round(float(maxy - miny), 2)},
     })
 
 
@@ -204,7 +223,7 @@ def preview(session_id):
 
     try:
         info = mw.find_flat_region(sess.mesh(), sess.welded(), face_index)
-        mesh = mw.preview_logo(sess.path2d(), info, params)
+        mesh = mw.preview_logo(sess.logo_polygons(), info, params)
     except mw.MeshError as exc:
         return _err(exc)
     return _mesh_to_glb_response(mesh)
@@ -232,12 +251,12 @@ def export(session_id):
 
     try:
         info = mw.find_flat_region(sess.mesh(), sess.welded(), face_index)
-        path2d = sess.path2d()
+        polygons = sess.logo_polygons()
         if mode == "emboss":
-            logo = mw.emboss(path2d, info, params, depth_mm=depth_mm, sink_mm=sink_mm)
+            logo = mw.emboss(polygons, info, params, depth_mm=depth_mm, sink_mm=sink_mm)
             named = {"base": sess.mesh(), "logo": logo}
         else:
-            pocketed, fill = mw.deboss(sess.mesh(), path2d, info, params,
+            pocketed, fill = mw.deboss(sess.mesh(), polygons, info, params,
                                         depth_mm=depth_mm, fill_extra_mm=fill_extra_mm)
             named = {"base": pocketed, "logo_fill": fill}
         data_3mf = mw.export_3mf(named)

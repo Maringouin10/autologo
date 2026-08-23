@@ -57,14 +57,58 @@ def to_glb(mesh: trimesh.Trimesh) -> bytes:
     return mesh.export(file_type="glb")
 
 
-def load_logo(path: str) -> "trimesh.path.Path2D":
+def load_logo(path: str) -> list:
+    """Parse an SVG into a list of shapely polygons (holes already resolved
+    where possible). Returns polygons directly rather than the raw
+    `Path2D` — accessing `Path2D.polygons_full` is exactly where this used
+    to crash the whole request: a text-only SVG (trimesh's SVG parser
+    silently drops `<text>`, leaving zero entities) raises `IndexError`, and
+    a self-intersecting/degenerate path can make its hole-nesting step (an
+    rtree query) raise `RTreeError` instead of returning something sane.
+    Both are handled here, once, so callers downstream can trust the result."""
     try:
         path2d = trimesh.load_path(path)
     except Exception as exc:
         raise MeshError(f"impossible de lire le SVG ({exc})") from exc
-    if path2d.polygons_full is None or len(path2d.polygons_full) == 0:
+
+    if len(path2d.entities) == 0:
+        raise MeshError(
+            "le SVG ne contient aucune forme reconnue. S'il contient du "
+            "texte, convertissez-le d'abord en tracés (dans Inkscape : "
+            "Chemin > Objet en chemin) avant de l'importer."
+        )
+
+    try:
+        polygons = list(path2d.polygons_full)
+    except Exception:
+        try:
+            polygons = list(path2d.polygons_closed)
+        except Exception as exc:
+            raise MeshError(
+                "le SVG contient une géométrie invalide (tracés qui se "
+                "croisent, points dupliqués…) que le moteur n'a pas pu "
+                "interpréter. Essayez de le simplifier dans un éditeur "
+                f"vectoriel (fusionner les tracés, supprimer les points "
+                f"superflus). Détail: {exc}"
+            ) from exc
+
+    polygons = [p for p in polygons if p is not None and _is_usable_polygon(p)]
+    if not polygons:
         raise MeshError("le SVG ne contient aucune forme fermée exploitable")
-    return path2d
+    return polygons
+
+
+def _is_usable_polygon(p) -> bool:
+    try:
+        return bool(p.is_valid) and p.area > 1e-6
+    except Exception:
+        return False
+
+
+def logo_bounds(polygons: list) -> tuple[float, float, float, float]:
+    """(minx, miny, maxx, maxy) across every polygon."""
+    xs_min, ys_min, xs_max, ys_max = zip(*(p.bounds for p in polygons))
+    return min(xs_min), min(ys_min), max(xs_max), max(ys_max)
 
 
 # --- flat-face detection ---------------------------------------------------
@@ -229,14 +273,10 @@ def _extrude_polygon(polygon, height: float) -> trimesh.Trimesh:
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
 
-def _logo_local_mesh(path2d, params: PlacementParams, height: float) -> trimesh.Trimesh:
+def _logo_local_mesh(polygons: list, params: PlacementParams, height: float) -> trimesh.Trimesh:
     """Extruded logo in its own local XY frame, centered on (0,0), z in
     [0, height]. Scale is derived from `width_mm` vs. the SVG's own bbox."""
-    polygons = path2d.polygons_full
-    if not polygons:
-        raise MeshError("le SVG ne contient aucune forme fermée exploitable")
-
-    minx, miny, maxx, maxy = path2d.bounds[0][0], path2d.bounds[0][1], path2d.bounds[1][0], path2d.bounds[1][1]
+    minx, miny, maxx, maxy = logo_bounds(polygons)
     bw, bh = float(maxx - minx), float(maxy - miny)
     longer = max(bw, bh, 1e-6)
     scale = params.width_mm / longer
@@ -271,25 +311,25 @@ def _to_world(mesh: trimesh.Trimesh, face: FaceInfo, z_shift: float) -> trimesh.
     return mesh
 
 
-def preview_logo(path2d, face: FaceInfo, params: PlacementParams,
+def preview_logo(polygons: list, face: FaceInfo, params: PlacementParams,
                   thickness: float = 0.6) -> trimesh.Trimesh:
     """Thin slab sitting just above the surface — fast to recompute on every
     slider tweak, purely for visual placement feedback."""
-    local = _logo_local_mesh(path2d, params, thickness)
+    local = _logo_local_mesh(polygons, params, thickness)
     return _to_world(local, face, z_shift=0.05)
 
 
-def emboss(path2d, face: FaceInfo, params: PlacementParams,
+def emboss(polygons: list, face: FaceInfo, params: PlacementParams,
            depth_mm: float, sink_mm: float) -> trimesh.Trimesh:
     """The logo as a standalone, raised object. `sink_mm` buries a sliver of
     its base in the model so the two parts overlap (and bond) instead of
     merely touching."""
     height = depth_mm + sink_mm
-    local = _logo_local_mesh(path2d, params, height)
+    local = _logo_local_mesh(polygons, params, height)
     return _to_world(local, face, z_shift=-sink_mm)
 
 
-def deboss(base: trimesh.Trimesh, path2d, face: FaceInfo, params: PlacementParams,
+def deboss(base: trimesh.Trimesh, polygons: list, face: FaceInfo, params: PlacementParams,
            depth_mm: float, fill_extra_mm: float = 0.0
            ) -> tuple[trimesh.Trimesh, trimesh.Trimesh]:
     """Engrave the logo into `base` and return (pocketed_base, fill_piece).
@@ -297,7 +337,7 @@ def deboss(base: trimesh.Trimesh, path2d, face: FaceInfo, params: PlacementParam
     proud of the surface), so it can be printed in a different filament and
     fits back in. Requires `manifold3d` for the boolean cut."""
     cut_over = max(1.0, depth_mm * 0.5)  # tool must poke out past the surface to cut cleanly
-    tool_local = _logo_local_mesh(path2d, params, depth_mm + cut_over)
+    tool_local = _logo_local_mesh(polygons, params, depth_mm + cut_over)
     tool = _to_world(tool_local, face, z_shift=-depth_mm)
     # STL/OBJ triangles are usually unwelded (each face owns private vertex
     # copies), so an un-merged mesh never satisfies is_volume even when it is
@@ -315,7 +355,7 @@ def deboss(base: trimesh.Trimesh, path2d, face: FaceInfo, params: PlacementParam
     if pocketed.is_empty:
         raise MeshError("la découpe a supprimé tout le modèle — logo trop grand/profond ?")
 
-    fill_local = _logo_local_mesh(path2d, params, depth_mm + fill_extra_mm)
+    fill_local = _logo_local_mesh(polygons, params, depth_mm + fill_extra_mm)
     fill = _to_world(fill_local, face, z_shift=-depth_mm)
     return pocketed, fill
 

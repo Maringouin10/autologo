@@ -31,7 +31,7 @@ class Session:
     # in-memory caches, lazily populated
     _mesh: object | None = field(default=None, repr=False)
     _welded: object | None = field(default=None, repr=False)
-    _path2d: object | None = field(default=None, repr=False)
+    _logo_polygons: list | None = field(default=None, repr=False)
 
     def touch(self) -> None:
         self.created_at = time.time()
@@ -58,13 +58,13 @@ class Session:
             self._welded = mw.welded_copy(self.mesh())
         return self._welded
 
-    def path2d(self):
-        if self._path2d is None:
-            self._path2d = mw.load_logo(str(self.logo_path))
-        return self._path2d
+    def logo_polygons(self) -> list:
+        if self._logo_polygons is None:
+            self._logo_polygons = mw.load_logo(str(self.logo_path))
+        return self._logo_polygons
 
     def invalidate_logo(self) -> None:
-        self._path2d = None
+        self._logo_polygons = None
 
 
 def create() -> Session:
