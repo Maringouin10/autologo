@@ -6,17 +6,21 @@ so a slicer (PrusaSlicer, Bambu Studio, OrcaSlicer…) can assign each its own
 filament/color for multi-material printing.
 
 Runs entirely in one Docker container; nothing is uploaded anywhere else. It
-does two things:
+does three things:
 
-- **The plain tool** (`/`, password-protected): upload any single-part 3D
-  model + an SVG logo, position it, export. Good for one-off jobs.
+- **The public gallery** (`/`, no login): every published product, as a
+  clickable grid — the storefront customers land on.
 - **The vendor platform** (`/admin` → `/o/<product>`): you (the vendor) upload
   a multi-part assembly once, mark exactly which piece(s)/face(s) a customer
   is allowed to put a logo on and with what print settings, and publish it.
-  Customers open the public link — no account, no password — place their
-  logo on the spot(s) you approved, and submit; you get back a 3MF (the
-  customized piece, or the whole assembly) plus a unique order code to match
-  against wherever you actually take the order/payment.
+  Customers open the product from the gallery (or its direct link) — no
+  account, no password — place their logo on the spot(s) you approved, and
+  submit; you get back a 3MF (the customized piece, or the whole assembly)
+  plus a unique order code to match against wherever you actually take the
+  order/payment.
+- **The plain tool** (`/tool`, password-protected): upload any single-part
+  3D model + an SVG logo, position it, export. Good for one-off jobs that
+  don't need a product page at all.
 
 ## Quick start
 
@@ -26,8 +30,8 @@ cp .env.example .env   # set DASHBOARD_PASSWORD / SECRET_KEY (or leave blank for
 docker compose up -d --build
 ```
 
-Open **http://localhost:8010** for the plain tool, or **/admin** for the
-vendor platform.
+Open **http://localhost:8010** for the public gallery, **/admin** to manage
+products, or **/tool** for the plain single-model tool.
 
 ## The vendor platform
 
@@ -97,6 +101,14 @@ filament/color to each.
 - The live preview never runs a boolean operation (it just shows where the
   logo will sit) — only **Export** in *gravé* mode runs the actual cut, so
   slider dragging stays fast even on a large model.
+- A **3MF** with real per-part color (`<basematerials>`/`<m:colorgroup>`
+  display colors — set in your slicer/CAD tool) shows that color in every
+  viewer and as the gallery card's swatch, instead of the flat default gray.
+  Plain STL/OBJ imports, or a 3MF with no color info, keep the default.
+- **Ajuster à la plaque / fit-to-plate** fits the logo against the flat
+  region's *actual outline*, not its bounding box — a round or L-shaped
+  spot is smaller than the rectangle around it — with a 1&nbsp;mm clearance
+  on every side.
 - If a *gravé* export fails with a "not watertight" error, the source model
   has gaps/non-manifold geometry that the boolean engine can't cut through
   cleanly — repair it first (e.g. in Blender / PrusaSlicer's fix tool), or

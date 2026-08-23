@@ -38,6 +38,7 @@ class Session:
     _logo_polygons: list | None = field(default=None, repr=False)
     parts: list | None = field(default=None, repr=False)   # assembly only
     geoms: dict | None = field(default=None, repr=False)   # assembly only, name -> Trimesh
+    part_colors: dict = field(default_factory=dict, repr=False)  # part name -> (r,g,b), from the 3MF if any
     # logo edits (SVG "edit" step): which top-level shapes to skip, and
     # whether to mirror the (remaining) logo before it's placed
     excluded_shapes: set = field(default_factory=set)
@@ -66,6 +67,13 @@ class Session:
                     str(self.model_path), self.model_ext)
             else:
                 self._mesh = mw.load_model(str(self.model_path), self.model_ext)
+            if self.model_ext == ".3mf":
+                self.part_colors = mw.extract_3mf_colors(str(self.model_path))
+                if self.is_assembly:
+                    mw.apply_part_colors(self._mesh, self.parts, self.part_colors)
+                elif self.part_colors:
+                    color = next(iter(self.part_colors.values()))
+                    self._mesh.visual.face_colors = [*color, 255]
         return self._mesh
 
     def face_adjacency(self):

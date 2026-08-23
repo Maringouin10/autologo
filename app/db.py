@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS products (
     model_ext    TEXT NOT NULL,
     export_mode  TEXT NOT NULL DEFAULT 'assembly',  -- assembly | part
     bounds_json  TEXT NOT NULL DEFAULT '{}',        -- {"min":[x,y,z],"max":[x,y,z]} for the viewer camera
+    colors_json  TEXT NOT NULL DEFAULT '{}',        -- {part_name: [r,g,b]}, extracted from the 3MF if any
     created_at   TEXT NOT NULL
 );
 
@@ -73,12 +74,12 @@ def _now() -> str:
 
 # --- products ------------------------------------------------------------
 def create_product(product_id: str, name: str, model_ext: str, export_mode: str,
-                    bounds_json: str = "{}") -> None:
+                    bounds_json: str = "{}", colors_json: str = "{}") -> None:
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO products (id, name, model_ext, export_mode, bounds_json, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (product_id, name, model_ext, export_mode, bounds_json, _now()),
+            "INSERT INTO products (id, name, model_ext, export_mode, bounds_json, "
+            "colors_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (product_id, name, model_ext, export_mode, bounds_json, colors_json, _now()),
         )
 
 

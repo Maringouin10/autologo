@@ -51,6 +51,14 @@ function animate() {
 animate();
 
 const modelMaterial = new THREE.MeshStandardMaterial({ color: 0x8fa6c9, metalness: 0.05, roughness: 0.55 });
+// A 3MF that carries real per-part color (extracted server-side, baked
+// into the GLB as vertex colors) should show it, not the flat default.
+const coloredModelMaterial = new THREE.MeshStandardMaterial({
+  color: 0xffffff, metalness: 0.05, roughness: 0.55, vertexColors: true,
+});
+function pickModelMaterial(mesh) {
+  return mesh.geometry.attributes.color ? coloredModelMaterial : modelMaterial;
+}
 const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x0a0c10, transparent: true, opacity: 0.35 });
 
 let modelObject = null;
@@ -75,7 +83,7 @@ function loadModelGlb(url, bounds) {
     let mesh = null;
     gltf.scene.traverse((obj) => { if (!mesh && obj.isMesh) mesh = obj; });
     if (!mesh) { setError("l'assemblage chargé ne contient aucun maillage."); return; }
-    mesh.material = modelMaterial;
+    mesh.material = pickModelMaterial(mesh);
     scene.add(mesh);
     modelObject = mesh;
     scene.add(new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry, 25), edgeMaterial));

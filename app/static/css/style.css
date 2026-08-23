@@ -172,6 +172,18 @@ body {
 }
 .copy-row button:hover { background: var(--accent-dim); }
 
+/* --- public gallery --- */
+.gallery-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px;
+}
+.gallery-card {
+  display: block; border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+  text-decoration: none; color: var(--text); background: var(--panel); transition: border-color 0.15s;
+}
+.gallery-card:hover { border-color: var(--accent); }
+.gallery-swatch { aspect-ratio: 4 / 3; }
+.gallery-name { padding: 12px; font-weight: 600; font-size: 0.9em; }
+
 /* --- zone builder (admin new product) --- */
 .zones-list { display: flex; flex-direction: column; gap: 8px; }
 .zone-card {

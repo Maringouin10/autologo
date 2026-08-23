@@ -24,7 +24,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from . import config, db, meshwork as mw, orders, store
 
-_HTML_ENDPOINTS = {"login", "logout", "index", "admin_home", "admin_new_product",
+_HTML_ENDPOINTS = {"login", "logout", "gallery", "tool", "admin_home", "admin_new_product",
                     "admin_product_detail", "customer_order"}
 
 logging.basicConfig(level=logging.INFO,
@@ -86,7 +86,7 @@ def handle_error(exc):
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if session.get("authed"):
-        return redirect(url_for("index"))
+        return redirect(url_for("admin_home"))
     if request.method == "POST":
         supplied = request.form.get("password", "")
         if config.DASHBOARD_PASSWORD and hmac.compare_digest(supplied, config.DASHBOARD_PASSWORD):
@@ -95,7 +95,7 @@ def login():
             session.permanent = True
             nxt = request.args.get("next")
             if not nxt or not nxt.startswith("/"):
-                nxt = url_for("index")
+                nxt = url_for("admin_home")
             return redirect(nxt)
         flash("Mot de passe incorrect.")
     return render_template("login.html")
@@ -107,9 +107,20 @@ def logout():
     return redirect(url_for("login"))
 
 
+# --- public gallery --------------------------------------------------------------
 @app.route("/")
+def gallery():
+    products = []
+    for p in db.list_products():
+        colors = json.loads(p["colors_json"] or "{}")
+        swatch = "#{:02x}{:02x}{:02x}".format(*next(iter(colors.values()))) if colors else "#8fa6c9"
+        products.append({"id": p["id"], "name": p["name"], "swatch": swatch})
+    return render_template("gallery.html", products=products)
+
+
+@app.route("/tool")
 @login_required
-def index():
+def tool():
     return render_template("index.html")
 
 
@@ -299,7 +310,7 @@ def fit_logo(session_id):
 
     try:
         info = mw.find_flat_region(sess.mesh(), sess.face_adjacency(), face_index)
-        width_mm, rotation_deg = mw.fit_to_face(sess.active_logo_polygons(), info.width, info.height)
+        width_mm, rotation_deg = mw.fit_to_face(sess.active_logo_polygons(), info)
     except mw.MeshError as exc:
         return _err(exc)
     return jsonify({"width_mm": width_mm, "rotation_deg": rotation_deg})
@@ -474,9 +485,10 @@ def admin_create_product():
         shutil.copy(str(sess.glb_path), str(pdir / "assembly.glb"))
     bounds = sess.mesh().bounds
     bounds_json = json.dumps({"min": bounds[0].tolist(), "max": bounds[1].tolist()})
+    colors_json = json.dumps({k: list(v) for k, v in sess.part_colors.items()})
 
     try:
-        db.create_product(product_id, name, sess.model_ext, export_mode, bounds_json)
+        db.create_product(product_id, name, sess.model_ext, export_mode, bounds_json, colors_json)
         for i, z in enumerate(zones_in):
             face = z.get("face") or {}
             for key in ("origin", "normal", "u", "v", "width", "height"):
@@ -656,7 +668,7 @@ def order_fit(order_session_id, zone_id):
         return _err(ValueError("aucun logo importé pour cette zone"))
     try:
         face = mw.FaceInfo.from_json(json.loads(zone_row["face_json"]))
-        width_mm, rotation_deg = mw.fit_to_face(work.active_logo_polygons(), face.width, face.height)
+        width_mm, rotation_deg = mw.fit_to_face(work.active_logo_polygons(), face)
     except mw.MeshError as exc:
         return _err(exc)
     return jsonify({"width_mm": width_mm, "rotation_deg": rotation_deg})

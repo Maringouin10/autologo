@@ -11,12 +11,17 @@ once, on demand, when the user hits Export.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+import xml.etree.ElementTree as ET
+import zipfile
+from dataclasses import dataclass, field
 
 import mapbox_earcut as earcut
 import numpy as np
 import trimesh
 from shapely import affinity
+from shapely.geometry import Polygon as ShapelyPolygon
+from shapely.geometry import box as shapely_box
+from shapely.ops import unary_union
 
 # Faces are grouped into a "flat region" when their normals agree within this
 # angle and they sit on (approximately) the same plane as the clicked face.
@@ -124,6 +129,79 @@ def to_glb(mesh: trimesh.Trimesh) -> bytes:
     return mesh.export(file_type="glb")
 
 
+_3MF_CORE_NS = "{http://schemas.microsoft.com/3dmanufacturing/core/2015/02}"
+_3MF_MATERIAL_NS = "{http://schemas.microsoft.com/3dmanufacturing/material/2015/02}"
+DEFAULT_PART_COLOR = (143, 166, 201)  # matches the viewer's flat default (0x8fa6c9)
+
+
+def extract_3mf_colors(path: str) -> dict[str, tuple[int, int, int]]:
+    """Best-effort: pull each named <object>'s display color out of a 3MF's
+    <basematerials>/<m:colorgroup> resources. trimesh's own 3MF reader
+    doesn't surface color at all (verified: every part comes back the same
+    flat gray regardless of what the file actually says), so this parses
+    the model XML directly. Never raises — a 3MF with no color info (most
+    plain STL/engineering exports) just yields an empty dict, same as a
+    non-3MF file."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            model_name = next((n for n in z.namelist() if n.lower().endswith(".model")), None)
+            if not model_name:
+                return {}
+            root = ET.fromstring(z.read(model_name))
+    except Exception:
+        return {}
+
+    def parse_hex(s):
+        s = (s or "").lstrip("#")
+        if len(s) < 6:
+            return None
+        try:
+            return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+        except ValueError:
+            return None
+
+    groups: dict[str, list] = {}
+    for bm in root.iter(f"{_3MF_CORE_NS}basematerials"):
+        groups[bm.get("id")] = [parse_hex(b.get("displaycolor")) for b in bm]
+    for cg in root.iter(f"{_3MF_MATERIAL_NS}colorgroup"):
+        groups[cg.get("id")] = [parse_hex(c.get("color")) for c in cg]
+
+    result: dict[str, tuple[int, int, int]] = {}
+    for obj in root.iter(f"{_3MF_CORE_NS}object"):
+        name, pid, pindex = obj.get("name"), obj.get("pid"), obj.get("pindex")
+        if not name or pid not in groups or pindex is None:
+            continue
+        try:
+            color = groups[pid][int(pindex)]
+        except (ValueError, IndexError):
+            continue
+        if color:
+            result[name] = color
+    return result
+
+
+def apply_part_colors(mesh: trimesh.Trimesh, parts: list[dict],
+                       colors: dict[str, tuple[int, int, int]]) -> bool:
+    """Paint an assembly's combined mesh with each part's extracted 3MF
+    color (falling back to a neutral gray for parts with none), so the
+    viewer shows something closer to the real product instead of one flat
+    tone. Returns False (mesh untouched) when there's nothing to paint."""
+    if not colors:
+        return False
+    face_colors = np.tile(np.array([*DEFAULT_PART_COLOR, 255], dtype=np.uint8), (len(mesh.faces), 1))
+    painted = False
+    for part in parts:
+        c = colors.get(part["name"])
+        if c is None:
+            continue
+        fs, fc = part["face_start"], part["face_count"]
+        face_colors[fs:fs + fc] = [*c, 255]
+        painted = True
+    if painted:
+        mesh.visual.face_colors = face_colors
+    return painted
+
+
 def load_logo(path: str) -> list:
     """Parse an SVG into a list of shapely polygons (holes already resolved
     where possible). Returns polygons directly rather than the raw
@@ -212,39 +290,69 @@ def flip_polygons(polygons: list, flip_h: bool, flip_v: bool) -> list:
     return [affinity.scale(p, xfact=xfact, yfact=yfact, origin=origin) for p in polygons]
 
 
-def fit_to_face(polygons: list, face_width: float, face_height: float,
-                 margin_frac: float = 0.04) -> tuple[float, float]:
-    """Largest (width_mm, rotation_deg) that fits the logo's bounding box
-    inside a face_width x face_height rectangle, leaving a small margin.
-    Coarse-scans rotation (bounding-box size is cheap to evaluate) rather
-    than solving the minimum-bounding-rectangle problem exactly — the win
-    from a better scale dwarfs the loss from a 1-2 degree granularity."""
-    usable_w = face_width * (1.0 - margin_frac)
-    usable_h = face_height * (1.0 - margin_frac)
-    pts = np.vstack([np.asarray(p.exterior.coords) for p in polygons])
-    center = pts.mean(axis=0)
-    rel = pts - center
+def _outline_polygon(face: "FaceInfo") -> ShapelyPolygon:
+    if face.outline:
+        poly = ShapelyPolygon(face.outline)
+        if poly.is_valid and poly.area > 1e-6:
+            return poly
+    # No usable outline on file (older stored zone, or the region's
+    # geometry didn't merge into one clean polygon) — the old behaviour,
+    # treating the region as its own bounding rectangle, is still a sane
+    # fallback for what's normally an actually-rectangular flat spot.
+    return shapely_box(-face.width / 2.0, -face.height / 2.0, face.width / 2.0, face.height / 2.0)
 
-    def extent(theta: float) -> tuple[float, float]:
-        c, s = math.cos(theta), math.sin(theta)
-        rx = rel[:, 0] * c - rel[:, 1] * s
-        ry = rel[:, 0] * s + rel[:, 1] * c
-        return float(rx.max() - rx.min()), float(ry.max() - ry.min())
 
-    orig_longer = max(*extent(0.0), 1e-6)
+def fit_to_face(polygons: list, face: "FaceInfo", margin_mm: float = 1.0) -> tuple[float, float]:
+    """Largest (width_mm, rotation_deg), logo centered on the face's own
+    origin, that fits entirely *inside the face's actual shape* — not its
+    bounding box, which overestimates the available space on anything
+    that isn't itself a rectangle (round, L-shaped, chamfered…) — leaving
+    `margin_mm` clear on every side. Coarse-scans rotation, binary-searches
+    the max scale at each: exact containment, cheap because each check is
+    just one shapely `.contains()` call."""
+    region = _outline_polygon(face)
+    usable = region.buffer(-margin_mm)
+    if usable.is_empty:
+        usable = region  # the margin alone ate the whole region — still better than refusing
 
-    def scale_at(theta: float) -> float:
-        w, h = extent(theta)
-        if w < 1e-9 or h < 1e-9:
-            return 0.0
-        return min(usable_w / w, usable_h / h)
+    logo_union = unary_union(polygons)
+    minx, miny, maxx, maxy = logo_union.bounds
+    orig_longer = max(maxx - minx, maxy - miny, 1e-6)
+    centered = affinity.translate(logo_union, xoff=-(minx + maxx) / 2.0, yoff=-(miny + maxy) / 2.0)
 
-    best_deg = max(range(0, 180, 2), key=lambda d: scale_at(math.radians(d)))
-    for d in (best_deg - 1, best_deg + 1):
-        if scale_at(math.radians(d)) > scale_at(math.radians(best_deg)):
-            best_deg = d
+    def fits(theta_deg: float, scale: float) -> bool:
+        if scale <= 0:
+            return True
+        shape = affinity.rotate(centered, theta_deg, origin=(0, 0))
+        shape = affinity.scale(shape, xfact=scale, yfact=scale, origin=(0, 0))
+        return usable.contains(shape)
 
-    width_mm = scale_at(math.radians(best_deg)) * orig_longer
+    ubx0, uby0, ubx1, uby1 = usable.bounds
+    # Generously large — just needs to be past any scale that could
+    # possibly fit, so the binary search always converges on the real edge.
+    hi = 2.0 * max(ubx1 - ubx0, uby1 - uby0, 1.0) / max(orig_longer, 1e-6) + 1.0
+
+    def max_scale_at(theta_deg: float) -> float:
+        lo, top = 0.0, hi
+        for _ in range(20):
+            mid = (lo + top) / 2.0
+            if fits(theta_deg, mid):
+                lo = mid
+            else:
+                top = mid
+        return lo
+
+    best_scale, best_deg = 0.0, 0.0
+    for deg in range(0, 180, 4):
+        s = max_scale_at(deg)
+        if s > best_scale:
+            best_scale, best_deg = s, deg
+    for d in (best_deg - 2, best_deg - 1, best_deg + 1, best_deg + 2):
+        s = max_scale_at(d)
+        if s > best_scale:
+            best_scale, best_deg = s, d
+
+    width_mm = best_scale * orig_longer
     return round(width_mm, 3), round(best_deg % 360, 1)
 
 
@@ -255,9 +363,13 @@ class FaceInfo:
     normal: np.ndarray   # unit outward normal
     u: np.ndarray        # unit in-plane axis ("local x")
     v: np.ndarray        # unit in-plane axis ("local y")
-    width: float          # region extent along u (mm)
-    height: float         # region extent along v (mm)
+    width: float          # region's bounding-box extent along u (mm)
+    height: float         # region's bounding-box extent along v (mm)
     face_count: int = 0
+    # the region's *true* outline in (u, v) mm, centered on `origin` — a
+    # list of [x, y] points, or None if it couldn't be computed (fit_to_face
+    # then falls back to treating the region as its own bounding rectangle)
+    outline: list | None = field(default=None)
 
     def to_json(self) -> dict:
         return {
@@ -268,6 +380,7 @@ class FaceInfo:
             "width": round(float(self.width), 3),
             "height": round(float(self.height), 3),
             "face_count": self.face_count,
+            "outline": self.outline,
         }
 
     @classmethod
@@ -283,6 +396,7 @@ class FaceInfo:
             width=float(data["width"]),
             height=float(data["height"]),
             face_count=int(data.get("face_count", 0)),
+            outline=data.get("outline"),
         )
 
 
@@ -333,19 +447,44 @@ def find_flat_region(mesh: trimesh.Trimesh, face_adjacency: np.ndarray, face_ind
 
     region = np.fromiter(visited, dtype=np.int64)
     u, v = _plane_basis(n0)
-    pts = mesh.vertices[mesh.faces[region]].reshape(-1, 3)
-    rel = pts - p0
-    pu = rel @ u
+    tri_pts = mesh.vertices[mesh.faces[region]]        # (n, 3, 3): n triangles, 3 verts, xyz
+    rel = tri_pts - p0
+    pu = rel @ u                                        # (n, 3)
     pv = rel @ v
     width = float(pu.max() - pu.min())
     height = float(pv.max() - pv.min())
     center_u = float((pu.max() + pu.min()) / 2.0)
     center_v = float((pv.max() + pv.min()) / 2.0)
     origin = p0 + center_u * u + center_v * v
+    outline = _region_outline(pu, pv, center_u, center_v)
 
     return FaceInfo(origin=origin, normal=n0, u=u, v=v,
                      width=max(width, 0.01), height=max(height, 0.01),
-                     face_count=len(region))
+                     face_count=len(region), outline=outline)
+
+
+def _region_outline(pu: np.ndarray, pv: np.ndarray,
+                     center_u: float, center_v: float) -> list | None:
+    """Merge a flat region's triangles (already projected onto its own u/v
+    plane) into their true outline — a round, L-shaped, or otherwise
+    non-rectangular flat spot is smaller than its own bounding box, and
+    fit_to_face() needs the real shape to not oversize a logo into
+    something that actually pokes off the edge."""
+    polys = []
+    for i in range(len(pu)):
+        tri = ShapelyPolygon(zip(pu[i].tolist(), pv[i].tolist()))
+        if not tri.is_valid or tri.area < 1e-9:
+            tri = tri.buffer(0)
+        if not tri.is_empty:
+            polys.append(tri)
+    if not polys:
+        return None
+    merged = unary_union(polys)
+    if merged.geom_type == "MultiPolygon":
+        merged = max(merged.geoms, key=lambda g: g.area)
+    if merged.is_empty or merged.geom_type != "Polygon" or merged.area < 1e-6:
+        return None
+    return [[round(x - center_u, 4), round(y - center_v, 4)] for x, y in merged.exterior.coords]
 
 
 # --- logo placement ---------------------------------------------------------

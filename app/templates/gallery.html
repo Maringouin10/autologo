@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoLogo — Nos produits</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="admin-body">
+  <header class="topbar">
+    <h1>🏷️ Nos produits personnalisables</h1>
+    <span class="muted">Choisissez un produit, placez votre logo</span>
+  </header>
+
+  <main class="admin-main">
+    {% if not products %}
+      <p class="hint">Aucun produit disponible pour l'instant.</p>
+    {% else %}
+      <div class="gallery-grid">
+        {% for p in products %}
+        <a class="gallery-card" href="{{ url_for('customer_order', product_id=p['id']) }}">
+          <div class="gallery-swatch" style="background:{{ p['swatch'] }}"></div>
+          <div class="gallery-name">{{ p['name'] }}</div>
+        </a>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </main>
+</body>
+</html>
