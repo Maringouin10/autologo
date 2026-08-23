@@ -23,6 +23,11 @@
       <p class="hint">Envoyez ce lien à vos clients — aucune connexion requise.</p>
     </section>
 
+    <div class="admin-toolbar">
+      <span></span>
+      <a class="btn-link" href="{{ url_for('admin_edit_product', product_id=product['id']) }}">✎ Modifier ce produit</a>
+    </div>
+
     <section class="admin-card">
       <h2>Zones personnalisables ({{ zones|length }})</h2>
       <table class="admin-table">

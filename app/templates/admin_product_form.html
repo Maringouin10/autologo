@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AutoLogo — Nouveau produit</title>
+  <title>AutoLogo — {{ "Modifier le produit" if product else "Nouveau produit" }}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <script type="importmap">
   {
@@ -14,14 +14,27 @@
   }
   </script>
 </head>
-<body>
+<body {% if product %}data-product-id="{{ product['id'] }}"
+      data-zones="{{ zones_json }}"
+      data-export-mode="{{ product['export_mode'] }}"{% endif %}>
   <header class="topbar">
-    <h1>🏷️ Nouveau produit</h1>
-    <a class="muted" href="{{ url_for('admin_home') }}">← Annuler</a>
+    <h1>🏷️ {{ "Modifier : " + product['name'] if product else "Nouveau produit" }}</h1>
+    <a class="muted" href="{{ url_for('admin_product_detail', product_id=product['id']) if product else url_for('admin_home') }}">← Annuler</a>
   </header>
 
   <main class="layout">
     <aside class="panel">
+      {% if product %}
+      <section class="step" id="step-model">
+        <h2>1. Assemblage 3D</h2>
+        <p class="hint">
+          Le modèle 3D d'un produit publié ne peut pas être remplacé : les
+          zones sont rattachées à ses faces. Pour changer de modèle, créez
+          un nouveau produit.
+        </p>
+        <p class="hint" id="model-info">Chargement…</p>
+      </section>
+      {% else %}
       <section class="step" id="step-model">
         <h2>1. Assemblage 3D</h2>
         <p class="hint">Un fichier 3MF contenant les différentes pièces (celle(s) à personnaliser et le reste).</p>
@@ -31,6 +44,7 @@
         </label>
         <p class="hint" id="model-info"></p>
       </section>
+      {% endif %}
 
       <section class="step" id="step-zone" disabled>
         <h2>2. Ajouter une zone</h2>
@@ -67,10 +81,11 @@
       </section>
 
       <section class="step" id="step-publish" disabled>
-        <h2>4. Publier</h2>
+        <h2>4. {{ "Enregistrer" if product else "Publier" }}</h2>
         <div class="field">
           <label>Nom du produit</label>
-          <input type="text" id="product-name" placeholder="Mug personnalisé">
+          <input type="text" id="product-name" placeholder="Mug personnalisé"
+                 value="{{ product['name'] if product else '' }}">
         </div>
         <div class="field">
           <label>Export pour le client</label>
@@ -79,10 +94,10 @@
             <option value="part">Pièce(s) personnalisée(s) seulement</option>
           </select>
         </div>
-        <button type="button" id="publish-btn">Publier le produit</button>
+        <button type="button" id="publish-btn">{{ "Enregistrer les modifications" if product else "Publier le produit" }}</button>
         <p class="hint error" id="publish-error"></p>
         <div id="publish-result" class="hidden">
-          <p class="hint">✓ Produit publié.</p>
+          <p class="hint">✓ {{ "Modifications enregistrées." if product else "Produit publié." }}</p>
           <div class="copy-row">
             <input type="text" readonly id="result-url">
             <button type="button" id="result-copy-btn">Copier</button>
@@ -94,10 +109,12 @@
 
     <div class="viewer-wrap">
       <div id="viewer"></div>
-      <div id="viewer-hint" class="viewer-hint">Importez l'assemblage 3D pour commencer.</div>
+      <div id="viewer-hint" class="viewer-hint">
+        {{ "Chargement du modèle…" if product else "Importez l'assemblage 3D pour commencer." }}
+      </div>
     </div>
   </main>
 
-  <script type="module" src="{{ url_for('static', filename='js/admin_new_product.js') }}"></script>
+  <script type="module" src="{{ url_for('static', filename='js/admin_product_form.js') }}"></script>
 </body>
 </html>

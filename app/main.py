@@ -25,7 +25,8 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from . import config, db, meshwork as mw, orders, store
 
 _HTML_ENDPOINTS = {"login", "logout", "gallery", "tool", "admin_home", "admin_new_product",
-                    "admin_product_detail", "admin_orders", "customer_order"}
+                    "admin_edit_product", "admin_product_detail", "admin_orders",
+                    "customer_order"}
 
 logging.basicConfig(level=logging.INFO,
                      format="%(asctime)s %(levelname)s %(name)s | %(message)s")
@@ -134,7 +135,27 @@ def admin_home():
 @app.route("/admin/products/new")
 @login_required
 def admin_new_product():
-    return render_template("admin_new_product.html")
+    return render_template("admin_product_form.html", product=None)
+
+
+@app.route("/admin/products/<product_id>/edit")
+@login_required
+def admin_edit_product(product_id):
+    product = db.get_product(product_id)
+    if product is None:
+        abort(404, "produit introuvable")
+    zones = [{
+        "id": z["id"],
+        "label": z["label"],
+        "part_name": z["part_name"],
+        "mode": z["mode"],
+        "depth_mm": z["depth_mm"],
+        "sink_mm": z["sink_mm"],
+        "fill_extra_mm": z["fill_extra_mm"],
+        "face": json.loads(z["face_json"]),   # the viewer needs it to draw the zone marker
+    } for z in db.list_zones(product_id)]
+    return render_template("admin_product_form.html", product=product,
+                            zones_json=json.dumps(zones))
 
 
 @app.route("/admin/products/<product_id>")
@@ -513,42 +534,117 @@ def admin_create_product():
     colors_json = json.dumps({k: list(v) for k, v in sess.part_colors.items()})
 
     try:
+        zones = _build_zones(zones_in, sess, existing={})
         db.create_product(product_id, name, sess.model_ext, export_mode, bounds_json, colors_json)
-        for i, z in enumerate(zones_in):
-            # Resolve the face SERVER-side from its index rather than trusting
-            # whatever geometry the client echoes back. The browser only ever
-            # needs origin/normal/u/v to draw its marker, and it used to send
-            # exactly those back — silently dropping `outline`, so every real
-            # zone fell back to "the region is its own bounding rectangle" and
-            # fit-to-plate oversized logos off the edge of any non-rectangular
-            # (e.g. round-cornered) plate. Recomputing here means the stored
-            # face is always complete, whatever the client sends.
-            try:
-                face_index = int(z["face_index"])
-            except (KeyError, TypeError, ValueError):
-                raise ValueError(f"zone {i + 1}: face_index manquant/invalide")
-            info = mw.find_flat_region(sess.mesh(), sess.face_adjacency(), face_index)
-            part = mw.part_for_face(sess.parts, face_index)
-            mode = z.get("mode", "emboss")
-            if mode not in ("emboss", "deboss"):
-                raise ValueError(f"zone {i + 1}: mode invalide")
-            db.add_zone(
-                product_id=product_id,
-                part_name=part["name"],
-                label=str(z.get("label") or f"Zone {i + 1}"),
-                face_index=face_index,
-                face_json=json.dumps(info.to_json()),
-                mode=mode,
-                depth_mm=max(0.1, float(z.get("depth_mm", 1.5))),
-                sink_mm=max(0.0, float(z.get("sink_mm", 0.3))),
-                fill_extra_mm=max(0.0, float(z.get("fill_extra_mm", 0.0))),
-                sort_order=i,
-            )
+        db.replace_zones(product_id, zones)
     except (ValueError, TypeError, mw.MeshError) as exc:
         db.delete_product(product_id)
         shutil.rmtree(pdir, ignore_errors=True)
         return _err(exc)
 
+    return jsonify({
+        "product_id": product_id,
+        "customer_url": url_for("customer_order", product_id=product_id, _external=True),
+    })
+
+
+def _build_zones(zones_in: list, sess, existing: dict) -> list[dict]:
+    """Turn the browser's zone list into rows ready to store.
+
+    A zone carrying an `id` already exists: its stored face is reused
+    untouched, so renaming it or changing its depth can never move where it
+    sits. Anything else is a freshly picked face, resolved SERVER-side from
+    its index rather than from geometry echoed back by the client — the
+    browser only needs origin/normal/u/v to draw its marker, and echoing
+    exactly those back used to silently drop `outline`, making fit-to-plate
+    treat every region as its own bounding rectangle."""
+    out = []
+    for i, z in enumerate(zones_in):
+        mode = z.get("mode", "emboss")
+        if mode not in ("emboss", "deboss"):
+            raise ValueError(f"zone {i + 1}: mode invalide")
+
+        old = existing.get(z.get("id")) if z.get("id") is not None else None
+        if old is not None:
+            part_name, face_index, face_json = old["part_name"], old["face_index"], old["face_json"]
+        else:
+            try:
+                face_index = int(z["face_index"])
+            except (KeyError, TypeError, ValueError):
+                raise ValueError(f"zone {i + 1}: face_index manquant/invalide")
+            info = mw.find_flat_region(sess.mesh(), sess.face_adjacency(), face_index)
+            part_name = mw.part_for_face(sess.parts, face_index)["name"]
+            face_json = json.dumps(info.to_json())
+
+        out.append({
+            "part_name": part_name,
+            "label": str(z.get("label") or f"Zone {i + 1}"),
+            "face_index": face_index,
+            "face_json": face_json,
+            "mode": mode,
+            "depth_mm": max(0.1, float(z.get("depth_mm", 1.5))),
+            "sink_mm": max(0.0, float(z.get("sink_mm", 0.3))),
+            "fill_extra_mm": max(0.0, float(z.get("fill_extra_mm", 0.0))),
+        })
+    return out
+
+
+@app.route("/api/admin/products/<product_id>/edit-session", methods=["POST"])
+@login_required
+def admin_edit_session(product_id):
+    """Open a working session on an already-published product's model, so the
+    edit screen can pick new faces exactly like the new-product screen does."""
+    product = db.get_product(product_id)
+    if product is None:
+        return _err(ValueError("produit introuvable"), 404)
+    model_path = config.PRODUCTS_DIR / product_id / f"model{product['model_ext']}"
+    if not model_path.exists():
+        return _err(ValueError("le fichier 3D de ce produit est introuvable"), 404)
+
+    sess = store.create()
+    sess.is_assembly = True
+    sess.model_ext = product["model_ext"]
+    shutil.copy(str(model_path), str(sess.model_path))
+    try:
+        mesh = sess.mesh()
+        sess.glb_path.write_bytes(mw.to_glb(mesh))
+    except mw.MeshError as exc:
+        return _err(exc)
+
+    bounds = mesh.bounds
+    return jsonify({
+        "session_id": sess.id,
+        "glb_url": url_for("session_glb", session_id=sess.id),
+        "bounds": {"min": bounds[0].tolist(), "max": bounds[1].tolist()},
+        "parts": [{"name": p["name"], "face_count": p["face_count"]} for p in sess.parts],
+    })
+
+
+@app.route("/api/admin/products/<product_id>", methods=["POST"])
+@login_required
+def admin_update_product(product_id):
+    product = db.get_product(product_id)
+    if product is None:
+        return _err(ValueError("produit introuvable"), 404)
+    data = request.get_json(force=True, silent=True) or {}
+    sess = _require_session(data.get("session_id", ""))
+    name = (data.get("name") or "").strip() or product["name"]
+    export_mode = data.get("export_mode", product["export_mode"])
+    if export_mode not in ("assembly", "part"):
+        return _err(ValueError("export_mode invalide (assembly|part)"))
+    zones_in = data.get("zones") or []
+    if not zones_in:
+        return _err(ValueError("gardez au moins une zone — sinon le produit "
+                                "ne serait plus commandable"))
+
+    existing = {z["id"]: z for z in db.list_zones(product_id)}
+    try:
+        zones = _build_zones(zones_in, sess, existing)
+    except (ValueError, TypeError, mw.MeshError) as exc:
+        return _err(exc)
+
+    db.update_product(product_id, name, export_mode)
+    db.replace_zones(product_id, zones)
     return jsonify({
         "product_id": product_id,
         "customer_url": url_for("customer_order", product_id=product_id, _external=True),

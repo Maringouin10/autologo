@@ -49,6 +49,13 @@ products, or **/tool** for the plain single-model tool.
    the **whole assembly** or **just the customized piece(s)**. You get a
    public link (`/o/<product_id>`) to send customers, and a product page
    listing every order received with a 3MF download for each.
+   **✎ Modifier ce produit** reopens the same screen on a published
+   product: rename it, switch its export mode, rename/retune/remove its
+   zones, or click new faces to add more. Zones you keep are left exactly
+   where they are (their stored face is reused untouched), the link and
+   past orders are unaffected, and you can't save a product with no zones
+   left. The 3D model itself is fixed once published — the zones are
+   pinned to that mesh's faces — so changing model means a new product.
 4. **Customer side** (`/o/<product_id>`, no login): upload an SVG, exclude
    shapes/mirror it if needed, drag/resize/fit it into the approved zone(s),
    hit **Envoyer ma commande** — they get a short order code back. Nothing

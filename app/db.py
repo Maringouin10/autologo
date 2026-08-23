@@ -114,6 +114,27 @@ def list_products() -> list[sqlite3.Row]:
         return conn.execute("SELECT * FROM products ORDER BY created_at DESC").fetchall()
 
 
+def update_product(product_id: str, name: str, export_mode: str) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE products SET name = ?, export_mode = ? WHERE id = ?",
+                      (name, export_mode, product_id))
+
+
+def replace_zones(product_id: str, zones: list[dict]) -> None:
+    """Swap a product's whole zone list in one transaction, so a failed edit
+    can't leave it half-updated (or, worse, with no zones at all — which
+    would 404 its public page)."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM zones WHERE product_id = ?", (product_id,))
+        for i, z in enumerate(zones):
+            conn.execute(
+                "INSERT INTO zones (product_id, part_name, label, face_index, face_json, mode, "
+                "depth_mm, sink_mm, fill_extra_mm, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (product_id, z["part_name"], z["label"], z["face_index"], z["face_json"],
+                 z["mode"], z["depth_mm"], z["sink_mm"], z["fill_extra_mm"], i),
+            )
+
+
 def delete_product(product_id: str) -> None:
     with get_conn() as conn:
         conn.execute("DELETE FROM zones WHERE product_id = ?", (product_id,))

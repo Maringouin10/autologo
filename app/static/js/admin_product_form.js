@@ -109,6 +109,10 @@ function addZoneMarker(face) {
 }
 
 // --- state -----------------------------------------------------------------
+// One screen serves both "new product" and "edit product". Editing skips the
+// upload step — a published product's model is fixed, since its zones are
+// pinned to that mesh's face indices — and starts from its stored zones.
+const EDIT_PRODUCT_ID = document.body.dataset.productId || null;
 const state = { sessionId: null, currentFace: null, zones: [] };
 
 function setError(msg) {
@@ -119,11 +123,9 @@ function enableStep(id, on) {
   if (on) el.removeAttribute("disabled"); else el.setAttribute("disabled", "");
 }
 
-// --- upload assembly ---------------------------------------------------------
-const modelInput = document.getElementById("model-input");
-const modelDrop = document.getElementById("model-drop");
 const modelInfo = document.getElementById("model-info");
 
+// --- upload assembly (new product only) ---------------------------------------
 function wireDropzone(dropEl, inputEl, onFile) {
   dropEl.addEventListener("click", () => inputEl.click());
   inputEl.addEventListener("change", () => { if (inputEl.files[0]) onFile(inputEl.files[0]); });
@@ -134,25 +136,55 @@ function wireDropzone(dropEl, inputEl, onFile) {
   dropEl.addEventListener("drop", (e) => { const f = e.dataTransfer.files[0]; if (f) onFile(f); });
 }
 
-wireDropzone(modelDrop, modelInput, async (file) => {
-  setError("");
-  modelInfo.textContent = "Import en cours…";
-  const fd = new FormData();
-  fd.append("file", file);
+const modelDrop = document.getElementById("model-drop");
+if (modelDrop) {
+  wireDropzone(modelDrop, document.getElementById("model-input"), async (file) => {
+    setError("");
+    modelInfo.textContent = "Import en cours…";
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const res = await fetch("/api/admin/upload/assembly", { method: "POST", body: fd });
+      const data = await readJson(res);
+      if (!res.ok) throw new Error(data.error || "échec de l'import");
+      state.sessionId = data.session_id;
+      document.getElementById("model-drop-label").textContent = file.name;
+      modelInfo.textContent = `${data.parts.length} pièce(s): ${data.parts.map((p) => p.name).join(", ")}`;
+      loadModelGlb(data.glb_url, data.bounds);
+      enableStep("step-zone", true);
+    } catch (err) {
+      modelInfo.textContent = "";
+      setError(err.message);
+    }
+  });
+}
+
+// --- edit mode: open a session on the product's already-stored model ----------
+async function bootEditMode() {
   try {
-    const res = await fetch("/api/admin/upload/assembly", { method: "POST", body: fd });
+    const res = await fetch(`/api/admin/products/${EDIT_PRODUCT_ID}/edit-session`, { method: "POST" });
     const data = await readJson(res);
-    if (!res.ok) throw new Error(data.error || "échec de l'import");
+    if (!res.ok) throw new Error(data.error || "échec du chargement du produit");
     state.sessionId = data.session_id;
-    document.getElementById("model-drop-label").textContent = file.name;
     modelInfo.textContent = `${data.parts.length} pièce(s): ${data.parts.map((p) => p.name).join(", ")}`;
     loadModelGlb(data.glb_url, data.bounds);
+
+    document.getElementById("export-mode").value = document.body.dataset.exportMode || "assembly";
+    for (const z of JSON.parse(document.body.dataset.zones || "[]")) {
+      // Existing zones keep their id. The server then reuses their stored
+      // face rather than re-resolving it, so renaming a zone or nudging a
+      // depth can never move where it actually sits on the model.
+      state.zones.push({ ...z, marker: addZoneMarker(z.face) });
+    }
+    renderZonesList();
     enableStep("step-zone", true);
+    enableStep("step-zones-list", true);
+    enableStep("step-publish", true);
   } catch (err) {
     modelInfo.textContent = "";
     setError(err.message);
   }
-});
+}
 
 // --- face picking --------------------------------------------------------------
 const raycaster = new THREE.Raycaster();
@@ -221,7 +253,7 @@ function renderZonesList() {
     card.className = "zone-card";
     card.innerHTML =
       `<span>${z.label} — ${z.part_name} — ${z.mode === "emboss" ? "relief" : "gravé"}, ${z.depth_mm} mm</span>` +
-      `<button type="button" class="zone-remove" title="Supprimer">✕</button>`;
+      `<button type="button" class="zone-remove" title="Retirer">✕</button>`;
     card.querySelector(".zone-remove").addEventListener("click", () => {
       scene.remove(z.marker);
       state.zones.splice(i, 1);
@@ -263,34 +295,39 @@ document.getElementById("add-zone-btn").addEventListener("click", () => {
   document.getElementById("face-info").textContent = "Aucune face sélectionnée.";
 });
 
-// --- publish -----------------------------------------------------------------
+// --- publish / save -----------------------------------------------------------
 document.getElementById("publish-btn").addEventListener("click", async () => {
   if (!state.sessionId || !state.zones.length) return;
   setError("");
   const btn = document.getElementById("publish-btn");
+  const originalLabel = btn.textContent;
   btn.disabled = true;
-  btn.textContent = "Publication en cours…";
+  btn.textContent = EDIT_PRODUCT_ID ? "Enregistrement…" : "Publication en cours…";
   try {
-    const res = await fetch("/api/admin/products", {
+    const url = EDIT_PRODUCT_ID ? `/api/admin/products/${EDIT_PRODUCT_ID}` : "/api/admin/products";
+    const res = await fetch(url, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         session_id: state.sessionId,
         name: document.getElementById("product-name").value.trim(),
         export_mode: document.getElementById("export-mode").value,
-        zones: state.zones.map(({ label, mode, depth_mm, sink_mm, fill_extra_mm, face_index }) =>
-          ({ label, mode, depth_mm, sink_mm, fill_extra_mm, face_index })),
+        // `id` marks a zone that already exists: the server keeps its stored
+        // face and only updates the editable fields. `face_index` marks a
+        // newly picked one, which the server resolves itself.
+        zones: state.zones.map(({ id, label, mode, depth_mm, sink_mm, fill_extra_mm, face_index }) =>
+          ({ id, label, mode, depth_mm, sink_mm, fill_extra_mm, face_index })),
       }),
     });
     const data = await readJson(res);
-    if (!res.ok) throw new Error(data.error || "échec de la publication");
+    if (!res.ok) throw new Error(data.error || "échec de l'enregistrement");
     document.getElementById("result-url").value = data.customer_url;
     document.getElementById("result-admin-link").href = `/admin/products/${data.product_id}`;
     document.getElementById("publish-result").classList.remove("hidden");
-    btn.textContent = "Produit publié ✓";
+    btn.textContent = EDIT_PRODUCT_ID ? "Modifications enregistrées ✓" : "Produit publié ✓";
   } catch (err) {
     setError(err.message);
     btn.disabled = false;
-    btn.textContent = "Publier le produit";
+    btn.textContent = originalLabel;
   }
 });
 
@@ -299,3 +336,5 @@ document.getElementById("result-copy-btn").addEventListener("click", () => {
   input.select();
   navigator.clipboard?.writeText(input.value);
 });
+
+if (EDIT_PRODUCT_ID) bootEditMode();
