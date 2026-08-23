@@ -173,7 +173,55 @@ def upload_logo():
         "ok": True,
         "logo_bounds": {"width": round(float(maxx - minx), 2),
                          "height": round(float(maxy - miny), 2)},
+        "shapes": mw.shapes_payload(polygons),
     })
+
+
+@app.route("/api/session/<session_id>/logo/edit", methods=["POST"])
+@login_required
+def edit_logo(session_id):
+    sess = _require_session(session_id)
+    if not sess.logo_path.exists():
+        return _err(ValueError("aucun logo importé pour cette session"))
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        excluded = {int(i) for i in data.get("excluded", [])}
+    except (TypeError, ValueError):
+        return _err(ValueError("liste d'exclusion invalide"))
+    n = len(sess.logo_polygons())
+    sess.excluded_shapes = {i for i in excluded if 0 <= i < n}
+    sess.flip_h = bool(data.get("flip_h", False))
+    sess.flip_v = bool(data.get("flip_v", False))
+
+    try:
+        minx, miny, maxx, maxy = mw.logo_bounds(sess.active_logo_polygons())
+    except mw.MeshError as exc:
+        return _err(exc)
+    return jsonify({
+        "ok": True,
+        "logo_bounds": {"width": round(float(maxx - minx), 2),
+                         "height": round(float(maxy - miny), 2)},
+    })
+
+
+@app.route("/api/session/<session_id>/logo/fit", methods=["POST"])
+@login_required
+def fit_logo(session_id):
+    sess = _require_session(session_id)
+    if not sess.logo_path.exists():
+        return _err(ValueError("aucun logo importé pour cette session"))
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        face_index = int(data["face_index"])
+    except (KeyError, TypeError, ValueError):
+        return _err(ValueError("face_index manquant/invalide"))
+
+    try:
+        info = mw.find_flat_region(sess.mesh(), sess.welded(), face_index)
+        width_mm, rotation_deg = mw.fit_to_face(sess.active_logo_polygons(), info.width, info.height)
+    except mw.MeshError as exc:
+        return _err(exc)
+    return jsonify({"width_mm": width_mm, "rotation_deg": rotation_deg})
 
 
 @app.route("/session/<session_id>/model.glb")
@@ -223,7 +271,7 @@ def preview(session_id):
 
     try:
         info = mw.find_flat_region(sess.mesh(), sess.welded(), face_index)
-        mesh = mw.preview_logo(sess.logo_polygons(), info, params)
+        mesh = mw.preview_logo(sess.active_logo_polygons(), info, params)
     except mw.MeshError as exc:
         return _err(exc)
     return _mesh_to_glb_response(mesh)
@@ -251,7 +299,7 @@ def export(session_id):
 
     try:
         info = mw.find_flat_region(sess.mesh(), sess.welded(), face_index)
-        polygons = sess.logo_polygons()
+        polygons = sess.active_logo_polygons()
         if mode == "emboss":
             logo = mw.emboss(polygons, info, params, depth_mm=depth_mm, sink_mm=sink_mm)
             named = {"base": sess.mesh(), "logo": logo}

@@ -41,19 +41,37 @@
         <p class="hint" id="logo-info"></p>
       </section>
 
+      <section class="step" id="step-logo-edit" disabled>
+        <h2>3. Modifier le logo</h2>
+        <p class="hint">
+          Décochez une forme pour l'exclure (utile pour un fond, un objet en
+          trop, ou un trou mal détecté — comme l'intérieur d'un "O" ressorti
+          en pièce pleine au lieu d'un creux).
+        </p>
+        <div id="shape-list" class="shape-list"></div>
+        <div class="flip-row">
+          <button type="button" class="toggle-btn" id="flip-h-btn">⇋ Miroir horizontal</button>
+          <button type="button" class="toggle-btn" id="flip-v-btn">⇵ Miroir vertical</button>
+        </div>
+        <div class="combined-preview" id="combined-preview-wrap">
+          <svg id="combined-preview"></svg>
+        </div>
+      </section>
+
       <section class="step" id="step-face" disabled>
-        <h2>3. Face</h2>
+        <h2>4. Face</h2>
         <p class="hint">Cliquez sur une face <b>plate</b> du modèle, dans la vue 3D.</p>
         <p class="hint" id="face-info">Aucune face sélectionnée.</p>
       </section>
 
       <section class="step" id="step-placement" disabled>
-        <h2>4. Placement</h2>
+        <h2>5. Placement</h2>
         <p class="hint">
           <b>Glissez le logo</b> (la forme verte) directement dans la vue 3D
           pour le positionner — les décalages ci-dessous suivent le geste et
           restent modifiables à la main pour un réglage au mm près.
         </p>
+        <button type="button" id="fit-btn">⤢ Ajuster à la plaque (max)</button>
         <div class="field">
           <label>Largeur (mm) <span id="width-val"></span></label>
           <input type="range" id="width" min="1" max="500" step="0.5">
@@ -73,7 +91,7 @@
       </section>
 
       <section class="step" id="step-mode" disabled>
-        <h2>5. Mode d'impression</h2>
+        <h2>6. Mode d'impression</h2>
         <div class="mode-choice">
           <label><input type="radio" name="mode" value="emboss" checked> Relief (logo en saillie)</label>
           <label><input type="radio" name="mode" value="deboss"> Gravé (logo creusé + pièce de remplissage)</label>

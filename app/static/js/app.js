@@ -131,6 +131,10 @@ const state = {
   faceIndex: null,
   hasLogo: false,
   faceInfo: null,
+  logoShapes: [],
+  excluded: new Set(),
+  flipH: false,
+  flipV: false,
 };
 
 function setError(msg) {
@@ -199,11 +203,110 @@ wireDropzone(logoDrop, logoInput, async (file) => {
     document.getElementById("logo-drop-label").textContent = file.name;
     logoInfo.textContent = `${data.logo_bounds.width} × ${data.logo_bounds.height} (unités SVG)`;
     state.hasLogo = true;
+    state.logoShapes = data.shapes;
+    state.excluded = new Set();
+    state.flipH = false;
+    state.flipV = false;
+    document.getElementById("flip-h-btn").classList.remove("active");
+    document.getElementById("flip-v-btn").classList.remove("active");
+    renderShapeList();
+    renderCombinedPreview();
+    enableStep("step-logo-edit", true);
     enableStep("step-face", true);
   } catch (err) {
     logoInfo.textContent = "";
     setError(err.message);
   }
+});
+
+// --- logo edit: shape picker, mirror ---------------------------------------------
+function ringsToPathD(rings) {
+  return rings.map((ring) => {
+    const [first, ...rest] = ring;
+    return `M${first[0]},${first[1]} ` + rest.map((p) => `L${p[0]},${p[1]}`).join(" ") + " Z";
+  }).join(" ");
+}
+
+function shapeSvg(shapes, cssClass) {
+  if (!shapes.length) return "";
+  const minx = Math.min(...shapes.map((s) => s.bbox[0]));
+  const miny = Math.min(...shapes.map((s) => s.bbox[1]));
+  const maxx = Math.max(...shapes.map((s) => s.bbox[2]));
+  const maxy = Math.max(...shapes.map((s) => s.bbox[3]));
+  const w = Math.max(maxx - minx, 1e-3), h = Math.max(maxy - miny, 1e-3);
+  const pad = Math.max(w, h) * 0.08;
+  const vb = `${minx - pad} ${miny - pad} ${w + 2 * pad} ${h + 2 * pad}`;
+  const path = shapes.map((s) => ringsToPathD(s.rings)).join(" ");
+  return `<svg viewBox="${vb}" preserveAspectRatio="xMidYMid meet">` +
+    `<path class="${cssClass}" fill-rule="evenodd" d="${path}"/></svg>`;
+}
+
+function renderShapeList() {
+  const list = document.getElementById("shape-list");
+  list.innerHTML = "";
+  for (const shape of state.logoShapes) {
+    const card = document.createElement("label");
+    card.className = "shape-card" + (state.excluded.has(shape.index) ? " excluded" : "");
+    card.innerHTML =
+      `<input type="checkbox" ${state.excluded.has(shape.index) ? "" : "checked"}>` +
+      shapeSvg([shape], "shape-fill");
+    card.querySelector("input").addEventListener("change", (e) => {
+      if (e.target.checked) state.excluded.delete(shape.index);
+      else state.excluded.add(shape.index);
+      card.classList.toggle("excluded", !e.target.checked);
+      renderCombinedPreview();
+      syncLogoEdit();
+    });
+    list.appendChild(card);
+  }
+}
+
+function renderCombinedPreview() {
+  const active = state.logoShapes.filter((s) => !state.excluded.has(s.index));
+  const wrap = document.getElementById("combined-preview-wrap");
+  wrap.innerHTML = active.length
+    ? shapeSvg(active, "shape-fill")
+    : '<p class="hint">(aucune forme incluse)</p>';
+  const svg = wrap.querySelector("svg");
+  if (svg) {
+    svg.id = "combined-preview";
+    svg.style.transform = `scale(${state.flipH ? -1 : 1}, ${state.flipV ? -1 : 1})`;
+  }
+}
+
+let logoEditTimer = null;
+function syncLogoEdit() {
+  if (logoEditTimer) clearTimeout(logoEditTimer);
+  logoEditTimer = setTimeout(async () => {
+    if (!state.sessionId) return;
+    try {
+      const res = await fetch(`/api/session/${state.sessionId}/logo/edit`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          excluded: [...state.excluded], flip_h: state.flipH, flip_v: state.flipV,
+        }),
+      });
+      const data = await readJson(res);
+      if (!res.ok) throw new Error(data.error || "échec de la mise à jour du logo");
+      setError("");
+      if (state.faceIndex != null) requestPreview();
+    } catch (err) {
+      setError(err.message);
+    }
+  }, 150);
+}
+
+document.getElementById("flip-h-btn").addEventListener("click", (e) => {
+  state.flipH = !state.flipH;
+  e.currentTarget.classList.toggle("active", state.flipH);
+  renderCombinedPreview();
+  syncLogoEdit();
+});
+document.getElementById("flip-v-btn").addEventListener("click", (e) => {
+  state.flipV = !state.flipV;
+  e.currentTarget.classList.toggle("active", state.flipV);
+  renderCombinedPreview();
+  syncLogoEdit();
 });
 
 // --- placement sliders ----------------------------------------------------------
@@ -271,6 +374,32 @@ function currentPlacement() {
   el.addEventListener("input", schedulePreview));
 [sliders.depth, sliders.sink, sliders.fill].forEach((el) =>
   el.addEventListener("input", updateReadout));
+
+// --- fit to plate -------------------------------------------------------------
+document.getElementById("fit-btn").addEventListener("click", async () => {
+  if (!state.sessionId || state.faceIndex == null) return;
+  setError("");
+  const btn = document.getElementById("fit-btn");
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/api/session/${state.sessionId}/logo/fit`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ face_index: state.faceIndex }),
+    });
+    const data = await readJson(res);
+    if (!res.ok) throw new Error(data.error || "échec de l'ajustement");
+    if (data.width_mm > Number(sliders.width.max)) sliders.width.max = data.width_mm;
+    sliders.width.value = data.width_mm;
+    sliders.rot.value = data.rotation_deg;
+    sliders.dx.value = 0;
+    sliders.dy.value = 0;
+    schedulePreview();
+  } catch (err) {
+    setError(err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 // --- face picking & drag-to-position ---------------------------------------------
 // Clicking an unpicked area of the model selects the flat face under the

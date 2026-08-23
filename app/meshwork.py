@@ -111,6 +111,76 @@ def logo_bounds(polygons: list) -> tuple[float, float, float, float]:
     return min(xs_min), min(ys_min), max(xs_max), max(ys_max)
 
 
+def shapes_payload(polygons: list) -> list[dict]:
+    """One entry per top-level polygon, as plain point lists a browser can
+    draw directly (`<path>` with fill-rule evenodd: exterior ring first,
+    then each hole). This is what lets a user spot — and exclude — a shape
+    that shouldn't be there: a background rectangle, a stray decorative
+    piece, or a hole that failed to nest properly and came through as its
+    own filled blob instead of a cut-out (e.g. the inside of an "O")."""
+    out = []
+    for i, p in enumerate(polygons):
+        rings = [list(map(list, p.exterior.coords))]
+        rings += [list(map(list, ring.coords)) for ring in p.interiors]
+        minx, miny, maxx, maxy = p.bounds
+        out.append({
+            "index": i,
+            "bbox": [round(minx, 3), round(miny, 3), round(maxx, 3), round(maxy, 3)],
+            "area": round(float(p.area), 3),
+            "rings": rings,
+        })
+    return out
+
+
+def flip_polygons(polygons: list, flip_h: bool, flip_v: bool) -> list:
+    """Mirror every polygon together around their shared bounding-box
+    center — flipping each one individually around its own center would
+    scramble a multi-piece logo instead of mirroring it as a whole."""
+    if not flip_h and not flip_v:
+        return polygons
+    minx, miny, maxx, maxy = logo_bounds(polygons)
+    origin = ((minx + maxx) / 2.0, (miny + maxy) / 2.0)
+    xfact = -1.0 if flip_h else 1.0
+    yfact = -1.0 if flip_v else 1.0
+    return [affinity.scale(p, xfact=xfact, yfact=yfact, origin=origin) for p in polygons]
+
+
+def fit_to_face(polygons: list, face_width: float, face_height: float,
+                 margin_frac: float = 0.04) -> tuple[float, float]:
+    """Largest (width_mm, rotation_deg) that fits the logo's bounding box
+    inside a face_width x face_height rectangle, leaving a small margin.
+    Coarse-scans rotation (bounding-box size is cheap to evaluate) rather
+    than solving the minimum-bounding-rectangle problem exactly — the win
+    from a better scale dwarfs the loss from a 1-2 degree granularity."""
+    usable_w = face_width * (1.0 - margin_frac)
+    usable_h = face_height * (1.0 - margin_frac)
+    pts = np.vstack([np.asarray(p.exterior.coords) for p in polygons])
+    center = pts.mean(axis=0)
+    rel = pts - center
+
+    def extent(theta: float) -> tuple[float, float]:
+        c, s = math.cos(theta), math.sin(theta)
+        rx = rel[:, 0] * c - rel[:, 1] * s
+        ry = rel[:, 0] * s + rel[:, 1] * c
+        return float(rx.max() - rx.min()), float(ry.max() - ry.min())
+
+    orig_longer = max(*extent(0.0), 1e-6)
+
+    def scale_at(theta: float) -> float:
+        w, h = extent(theta)
+        if w < 1e-9 or h < 1e-9:
+            return 0.0
+        return min(usable_w / w, usable_h / h)
+
+    best_deg = max(range(0, 180, 2), key=lambda d: scale_at(math.radians(d)))
+    for d in (best_deg - 1, best_deg + 1):
+        if scale_at(math.radians(d)) > scale_at(math.radians(best_deg)):
+            best_deg = d
+
+    width_mm = scale_at(math.radians(best_deg)) * orig_longer
+    return round(width_mm, 3), round(best_deg % 360, 1)
+
+
 # --- flat-face detection ---------------------------------------------------
 @dataclass
 class FaceInfo:

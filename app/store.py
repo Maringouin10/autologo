@@ -32,6 +32,11 @@ class Session:
     _mesh: object | None = field(default=None, repr=False)
     _welded: object | None = field(default=None, repr=False)
     _logo_polygons: list | None = field(default=None, repr=False)
+    # logo edits (SVG "edit" step): which top-level shapes to skip, and
+    # whether to mirror the (remaining) logo before it's placed
+    excluded_shapes: set = field(default_factory=set)
+    flip_h: bool = False
+    flip_v: bool = False
 
     def touch(self) -> None:
         self.created_at = time.time()
@@ -59,12 +64,26 @@ class Session:
         return self._welded
 
     def logo_polygons(self) -> list:
+        """Every top-level shape parsed from the SVG, unedited — the stable
+        base a shape's `index` (from the edit step) refers to."""
         if self._logo_polygons is None:
             self._logo_polygons = mw.load_logo(str(self.logo_path))
         return self._logo_polygons
 
+    def active_logo_polygons(self) -> list:
+        """What placement/preview/export should actually use: excluded
+        shapes dropped, flip applied."""
+        polys = self.logo_polygons()
+        active = [p for i, p in enumerate(polys) if i not in self.excluded_shapes]
+        if not active:
+            raise mw.MeshError("toutes les formes du logo sont exclues — incluez-en au moins une")
+        return mw.flip_polygons(active, self.flip_h, self.flip_v)
+
     def invalidate_logo(self) -> None:
         self._logo_polygons = None
+        self.excluded_shapes = set()
+        self.flip_h = False
+        self.flip_v = False
 
 
 def create() -> Session:
