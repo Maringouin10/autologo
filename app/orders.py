@@ -159,18 +159,21 @@ def submit(sess: OrderSession) -> str:
         if part_name not in working_parts:
             raise mw.MeshError(f"pièce '{part_name}' introuvable dans le modèle")
         face = mw.FaceInfo.from_json(json.loads(row["face_json"]))
-        polygons = work.active_logo_polygons()
+        shapes = work.active_logo_polygons()
         params = work.placement_params()
         touched_parts.add(part_name)
 
         if row["mode"] == "emboss":
-            logo = mw.emboss(polygons, face, params, depth_mm=row["depth_mm"], sink_mm=row["sink_mm"])
-            named[f"{part_name}_logo_{zone_id}"] = logo
+            logos = mw.emboss(shapes, face, params,
+                               depth_mm=row["depth_mm"], sink_mm=row["sink_mm"])
         else:
-            pocketed, fill = mw.deboss(working_parts[part_name], polygons, face, params,
-                                        depth_mm=row["depth_mm"], fill_extra_mm=row["fill_extra_mm"])
+            pocketed, logos = mw.deboss(working_parts[part_name], shapes, face, params,
+                                         depth_mm=row["depth_mm"], fill_extra_mm=row["fill_extra_mm"])
             working_parts[part_name] = pocketed
-            named[f"{part_name}_logo_{zone_id}"] = fill
+        # One object per fill color, so the slicer can assign a filament to
+        # each; the zone id keeps names unique across a multi-zone product.
+        for i, (color, mesh) in enumerate(logos.items()):
+            named[f"{part_name}_logo_{zone_id}_{i + 1}_{color.lstrip('#')}"] = mesh
 
     for name in touched_parts:
         named[name] = working_parts[name]

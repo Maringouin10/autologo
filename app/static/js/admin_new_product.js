@@ -22,14 +22,19 @@ viewerEl.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
-scene.add(new THREE.HemisphereLight(0xffffff, 0x444455, 1.0));
-const keyLight = new THREE.DirectionalLight(0xffffff, 1.6);
+// Bright, evenly-lit rig: renderer tone-mapping keeps the highlights from
+// blowing out even with the much stronger lights below.
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+scene.add(new THREE.AmbientLight(0xffffff, 1.1));
+scene.add(new THREE.HemisphereLight(0xffffff, 0x556070, 2.0));
+const keyLight = new THREE.DirectionalLight(0xffffff, 3.0);
 keyLight.position.set(100, 200, 150);
 scene.add(keyLight);
-const fillLight = new THREE.DirectionalLight(0xaac4ff, 0.6);
+const fillLight = new THREE.DirectionalLight(0xcfe0ff, 1.5);
 fillLight.position.set(-120, 60, -100);
 scene.add(fillLight);
-const rimLight = new THREE.DirectionalLight(0xffffff, 0.4);
+const rimLight = new THREE.DirectionalLight(0xffffff, 1.2);
 rimLight.position.set(0, -150, 50);
 scene.add(rimLight);
 scene.add(new THREE.GridHelper(400, 40, 0x2a2f3a, 0x1c2029));

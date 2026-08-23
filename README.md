@@ -109,6 +109,14 @@ filament/color to each.
   region's *actual outline*, not its bounding box — a round or L-shaped
   spot is smaller than the rectangle around it — with a 1&nbsp;mm clearance
   on every side.
+- **A logo SVG may use up to 3 colors.** Each element's `fill` is read and
+  every distinct color becomes its own object in the exported 3MF
+  (`logo_1_ff0000`, `logo_2_0000ff`, …) so you can assign one filament per
+  color in the slicer; all groups share one placement, so they stay in
+  register. The shape picker and the 3D preview show the real colors. A
+  4th+ color is merged into the nearest kept one rather than dropped, and
+  `fill="none"` shapes (stroke-only guides) are ignored. An SVG with no
+  fill info prints as a single default color, exactly as before.
 - If a *gravé* export fails with a "not watertight" error, the source model
   has gaps/non-manifold geometry that the boolean engine can't cut through
   cleanly — repair it first (e.g. in Blender / PrusaSlicer's fix tool), or

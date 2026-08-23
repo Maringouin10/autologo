@@ -217,6 +217,14 @@ def _placement_params(data: dict) -> mw.PlacementParams:
     )
 
 
+def _named_logo_meshes(meshes_by_color: dict, prefix: str) -> dict:
+    """Name each color group so the slicer's object list is self-explaining
+    (`logo_1_ff0000`), keeping the color in the name since 3MF object names
+    are all a slicer shows when assigning filaments."""
+    return {f"{prefix}_{i + 1}_{color.lstrip('#')}": mesh
+            for i, (color, mesh) in enumerate(meshes_by_color.items())}
+
+
 def _mesh_to_glb_response(mesh):
     data = mw.to_glb(mesh)
     return send_file(io.BytesIO(data), mimetype="model/gltf-binary",
@@ -407,14 +415,15 @@ def export(session_id):
 
     try:
         info = mw.find_flat_region(sess.mesh(), sess.face_adjacency(), face_index)
-        polygons = sess.active_logo_polygons()
+        shapes = sess.active_logo_polygons()
         if mode == "emboss":
-            logo = mw.emboss(polygons, info, params, depth_mm=depth_mm, sink_mm=sink_mm)
-            named = {"base": sess.mesh(), "logo": logo}
+            logos = mw.emboss(shapes, info, params, depth_mm=depth_mm, sink_mm=sink_mm)
+            named = {"base": sess.mesh()}
         else:
-            pocketed, fill = mw.deboss(sess.mesh(), polygons, info, params,
-                                        depth_mm=depth_mm, fill_extra_mm=fill_extra_mm)
-            named = {"base": pocketed, "logo_fill": fill}
+            pocketed, logos = mw.deboss(sess.mesh(), shapes, info, params,
+                                         depth_mm=depth_mm, fill_extra_mm=fill_extra_mm)
+            named = {"base": pocketed}
+        named.update(_named_logo_meshes(logos, "logo"))
         data_3mf = mw.export_3mf(named)
     except mw.MeshError as exc:
         return _err(exc)

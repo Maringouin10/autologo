@@ -10,6 +10,7 @@ once, on demand, when the user hits Export.
 """
 from __future__ import annotations
 
+import io
 import math
 import xml.etree.ElementTree as ET
 import zipfile
@@ -202,45 +203,174 @@ def apply_part_colors(mesh: trimesh.Trimesh, parts: list[dict],
     return painted
 
 
-def load_logo(path: str) -> list:
-    """Parse an SVG into a list of shapely polygons (holes already resolved
-    where possible). Returns polygons directly rather than the raw
-    `Path2D` — accessing `Path2D.polygons_full` is exactly where this used
-    to crash the whole request: a text-only SVG (trimesh's SVG parser
-    silently drops `<text>`, leaving zero entities) raises `IndexError`, and
-    a self-intersecting/degenerate path can make its hole-nesting step (an
-    rtree query) raise `RTreeError` instead of returning something sane.
-    Both are handled here, once, so callers downstream can trust the result."""
+# How many distinct fill colors a logo may print in. Extra colors are
+# merged into the nearest kept one rather than dropped — a 4th color is a
+# design detail, not a reason to refuse the file.
+MAX_LOGO_COLORS = 3
+DEFAULT_LOGO_COLOR = "#36d17a"
+
+_SVG_SHAPE_TAGS = {"path", "circle", "rect", "ellipse", "polygon", "polyline", "line"}
+_SVG_NS = "http://www.w3.org/2000/svg"
+# The handful of CSS named colors worth resolving; anything else unparseable
+# falls back to DEFAULT_LOGO_COLOR (the shape still prints, just in the
+# default filament slot).
+_NAMED_COLORS = {
+    "black": "#000000", "white": "#ffffff", "red": "#ff0000", "green": "#008000",
+    "blue": "#0000ff", "yellow": "#ffff00", "cyan": "#00ffff", "magenta": "#ff00ff",
+    "gray": "#808080", "grey": "#808080", "orange": "#ffa500", "purple": "#800080",
+    "silver": "#c0c0c0", "lime": "#00ff00", "navy": "#000080", "teal": "#008080",
+}
+
+
+@dataclass
+class LogoShape:
+    """One top-level closed shape from the SVG, plus the fill color it was
+    drawn with — the unit both the shape picker and the multi-color export
+    work in."""
+    polygon: object
+    color: str = DEFAULT_LOGO_COLOR
+
+
+def _normalize_color(raw: str | None) -> str | None:
+    """SVG fill -> '#rrggbb'. None means "no fill" (the shape isn't
+    printable — e.g. a stroke-only guide line), which the caller drops."""
+    if raw is None:
+        return DEFAULT_LOGO_COLOR
+    s = raw.strip().lower()
+    if s in ("none", "transparent"):
+        return None
+    if s in _NAMED_COLORS:
+        return _NAMED_COLORS[s]
+    if s.startswith("#"):
+        h = s[1:]
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        if len(h) == 6:
+            try:
+                int(h, 16)
+                return f"#{h}"
+            except ValueError:
+                pass
+    if s.startswith("rgb("):
+        try:
+            parts = [int(float(x)) for x in s[4:].rstrip(")").split(",")[:3]]
+            return "#{:02x}{:02x}{:02x}".format(*(max(0, min(255, v)) for v in parts))
+        except (ValueError, IndexError):
+            pass
+    return DEFAULT_LOGO_COLOR
+
+
+def _element_fill(el, inherited: str | None) -> str | None:
+    style = el.get("style") or ""
+    for decl in style.split(";"):
+        if ":" in decl:
+            k, v = decl.split(":", 1)
+            if k.strip() == "fill":
+                return v.strip()
+    return el.get("fill") or inherited
+
+
+def _collect_svg_shapes(el, inherited: str | None, out: list) -> list:
+    fill = _element_fill(el, inherited)
+    if el.tag.split("}")[-1] in _SVG_SHAPE_TAGS:
+        out.append((el, fill))
+    for child in el:
+        _collect_svg_shapes(child, fill, out)
+    return out
+
+
+def _polygons_of(path2d) -> list:
+    """polygons_full with the documented fallbacks — see load_logo."""
     try:
-        path2d = trimesh.load_path(path)
+        polygons = list(path2d.polygons_full)
+    except Exception:
+        polygons = list(path2d.polygons_closed)
+    return [p for p in polygons if p is not None and _is_usable_polygon(p)]
+
+
+def _hex_to_rgb(h: str) -> tuple[int, int, int]:
+    h = h.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _cap_colors(shapes: list) -> list:
+    """Keep at most MAX_LOGO_COLORS distinct colors, chosen by how much
+    area each covers; every other shape is re-tagged to whichever kept
+    color is closest in RGB, so nothing silently disappears from a logo
+    that happens to use a few near-identical shades."""
+    area_by_color: dict[str, float] = {}
+    for s in shapes:
+        area_by_color[s.color] = area_by_color.get(s.color, 0.0) + float(s.polygon.area)
+    if len(area_by_color) <= MAX_LOGO_COLORS:
+        return shapes
+
+    kept = sorted(area_by_color, key=lambda c: area_by_color[c], reverse=True)[:MAX_LOGO_COLORS]
+    kept_rgb = {c: _hex_to_rgb(c) for c in kept}
+
+    def nearest(color: str) -> str:
+        r, g, b = _hex_to_rgb(color)
+        return min(kept, key=lambda k: sum((a - c) ** 2 for a, c in zip(kept_rgb[k], (r, g, b))))
+
+    return [s if s.color in kept_rgb else LogoShape(s.polygon, nearest(s.color)) for s in shapes]
+
+
+def load_logo(path: str) -> list:
+    """Parse an SVG into a list of LogoShape (polygon + its fill color).
+
+    Each drawable SVG element is parsed on its own (wrapped in a minimal
+    standalone SVG) rather than letting trimesh flatten the whole file at
+    once: trimesh's Path2D keeps no link between an entity and the fill it
+    was drawn with, so per-element parsing is the only way to know which
+    polygon is which color. Holes still nest correctly because a hole and
+    its outer ring live in the *same* element (an "O" is one path), and
+    that element is parsed as a unit.
+
+    Handled here so callers downstream can trust the result: a text-only
+    SVG (trimesh's parser silently drops `<text>`, leaving zero entities)
+    used to raise IndexError, and a self-intersecting/degenerate path can
+    make the hole-nesting step (an rtree query) raise RTreeError."""
+    try:
+        with open(path, "rb") as f:
+            root = ET.fromstring(f.read())
     except Exception as exc:
         raise MeshError(f"impossible de lire le SVG ({exc})") from exc
 
-    if len(path2d.entities) == 0:
+    elements = _collect_svg_shapes(root, None, [])
+    if not elements:
         raise MeshError(
             "le SVG ne contient aucune forme reconnue. S'il contient du "
             "texte, convertissez-le d'abord en tracés (dans Inkscape : "
             "Chemin > Objet en chemin) avant de l'importer."
         )
 
-    try:
-        polygons = list(path2d.polygons_full)
-    except Exception:
+    root_attrs = {k: v for k, v in root.attrib.items() if k in ("width", "height", "viewBox")}
+    shapes: list[LogoShape] = []
+    failures = 0
+    for el, raw_fill in elements:
+        color = _normalize_color(raw_fill)
+        if color is None:          # fill="none": a guide/stroke-only shape
+            continue
+        mini = ET.Element(f"{{{_SVG_NS}}}svg", root_attrs)
+        mini.append(el)
         try:
-            polygons = list(path2d.polygons_closed)
-        except Exception as exc:
+            path2d = trimesh.load_path(io.BytesIO(ET.tostring(mini)), file_type="svg")
+            polys = _polygons_of(path2d)
+        except Exception:
+            failures += 1
+            continue
+        shapes.extend(LogoShape(p, color) for p in polys)
+
+    if not shapes:
+        if failures:
             raise MeshError(
                 "le SVG contient une géométrie invalide (tracés qui se "
                 "croisent, points dupliqués…) que le moteur n'a pas pu "
                 "interpréter. Essayez de le simplifier dans un éditeur "
-                f"vectoriel (fusionner les tracés, supprimer les points "
-                f"superflus). Détail: {exc}"
-            ) from exc
-
-    polygons = [p for p in polygons if p is not None and _is_usable_polygon(p)]
-    if not polygons:
+                "vectoriel (fusionner les tracés, supprimer les points "
+                "superflus)."
+            )
         raise MeshError("le SVG ne contient aucune forme fermée exploitable")
-    return polygons
+    return _cap_colors(shapes)
 
 
 def _is_usable_polygon(p) -> bool:
@@ -250,21 +380,32 @@ def _is_usable_polygon(p) -> bool:
         return False
 
 
-def logo_bounds(polygons: list) -> tuple[float, float, float, float]:
-    """(minx, miny, maxx, maxy) across every polygon."""
-    xs_min, ys_min, xs_max, ys_max = zip(*(p.bounds for p in polygons))
+def logo_colors(shapes: list) -> list[str]:
+    """Distinct colors present, in first-seen order — the filament slots
+    this logo needs."""
+    seen = []
+    for s in shapes:
+        if s.color not in seen:
+            seen.append(s.color)
+    return seen
+
+
+def logo_bounds(shapes: list) -> tuple[float, float, float, float]:
+    """(minx, miny, maxx, maxy) across every shape."""
+    xs_min, ys_min, xs_max, ys_max = zip(*(s.polygon.bounds for s in shapes))
     return min(xs_min), min(ys_min), max(xs_max), max(ys_max)
 
 
-def shapes_payload(polygons: list) -> list[dict]:
-    """One entry per top-level polygon, as plain point lists a browser can
+def shapes_payload(shapes: list) -> list[dict]:
+    """One entry per top-level shape, as plain point lists a browser can
     draw directly (`<path>` with fill-rule evenodd: exterior ring first,
-    then each hole). This is what lets a user spot — and exclude — a shape
-    that shouldn't be there: a background rectangle, a stray decorative
-    piece, or a hole that failed to nest properly and came through as its
-    own filled blob instead of a cut-out (e.g. the inside of an "O")."""
+    then each hole) plus its color. This is what lets a user spot — and
+    exclude — a shape that shouldn't be there: a background rectangle, a
+    stray decorative piece, or a hole that failed to nest properly and came
+    through as its own filled blob instead of a cut-out (e.g. inside an "O")."""
     out = []
-    for i, p in enumerate(polygons):
+    for i, s in enumerate(shapes):
+        p = s.polygon
         rings = [list(map(list, p.exterior.coords))]
         rings += [list(map(list, ring.coords)) for ring in p.interiors]
         minx, miny, maxx, maxy = p.bounds
@@ -272,22 +413,24 @@ def shapes_payload(polygons: list) -> list[dict]:
             "index": i,
             "bbox": [round(minx, 3), round(miny, 3), round(maxx, 3), round(maxy, 3)],
             "area": round(float(p.area), 3),
+            "color": s.color,
             "rings": rings,
         })
     return out
 
 
-def flip_polygons(polygons: list, flip_h: bool, flip_v: bool) -> list:
-    """Mirror every polygon together around their shared bounding-box
+def flip_polygons(shapes: list, flip_h: bool, flip_v: bool) -> list:
+    """Mirror every shape together around their shared bounding-box
     center — flipping each one individually around its own center would
     scramble a multi-piece logo instead of mirroring it as a whole."""
     if not flip_h and not flip_v:
-        return polygons
-    minx, miny, maxx, maxy = logo_bounds(polygons)
+        return shapes
+    minx, miny, maxx, maxy = logo_bounds(shapes)
     origin = ((minx + maxx) / 2.0, (miny + maxy) / 2.0)
     xfact = -1.0 if flip_h else 1.0
     yfact = -1.0 if flip_v else 1.0
-    return [affinity.scale(p, xfact=xfact, yfact=yfact, origin=origin) for p in polygons]
+    return [LogoShape(affinity.scale(s.polygon, xfact=xfact, yfact=yfact, origin=origin), s.color)
+            for s in shapes]
 
 
 def _outline_polygon(face: "FaceInfo") -> ShapelyPolygon:
@@ -302,7 +445,7 @@ def _outline_polygon(face: "FaceInfo") -> ShapelyPolygon:
     return shapely_box(-face.width / 2.0, -face.height / 2.0, face.width / 2.0, face.height / 2.0)
 
 
-def fit_to_face(polygons: list, face: "FaceInfo", margin_mm: float = 1.0) -> tuple[float, float]:
+def fit_to_face(shapes: list, face: "FaceInfo", margin_mm: float = 1.0) -> tuple[float, float]:
     """Largest (width_mm, rotation_deg), logo centered on the face's own
     origin, that fits entirely *inside the face's actual shape* — not its
     bounding box, which overestimates the available space on anything
@@ -315,7 +458,7 @@ def fit_to_face(polygons: list, face: "FaceInfo", margin_mm: float = 1.0) -> tup
     if usable.is_empty:
         usable = region  # the margin alone ate the whole region — still better than refusing
 
-    logo_union = unary_union(polygons)
+    logo_union = unary_union([s.polygon for s in shapes])
     minx, miny, maxx, maxy = logo_union.bounds
     orig_longer = max(maxx - minx, maxy - miny, 1e-6)
     centered = affinity.translate(logo_union, xoff=-(minx + maxx) / 2.0, yoff=-(miny + maxy) / 2.0)
@@ -567,12 +710,12 @@ def _extrude_polygon(polygon, height: float) -> trimesh.Trimesh:
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
 
-def _logo_local_mesh(polygons: list, params: PlacementParams, height: float) -> trimesh.Trimesh:
-    """Extruded logo in its own local XY frame, centered on (0,0), z in
-    [0, height]. Scale is derived from `width_mm` vs. the SVG's own bbox."""
-    minx, miny, maxx, maxy = logo_bounds(polygons)
-    bw, bh = float(maxx - minx), float(maxy - miny)
-    longer = max(bw, bh, 1e-6)
+def _placement_matrix(shapes: list, params: PlacementParams) -> list[float]:
+    """The affine that takes SVG coordinates to face-local mm. Derived from
+    the WHOLE logo's bbox (not per color group) so every color group stays
+    in register with the others."""
+    minx, miny, maxx, maxy = logo_bounds(shapes)
+    longer = max(float(maxx - minx), float(maxy - miny), 1e-6)
     scale = params.width_mm / longer
     cx, cy = float(minx + maxx) / 2.0, float(miny + maxy) / 2.0
 
@@ -584,13 +727,36 @@ def _logo_local_mesh(polygons: list, params: PlacementParams, height: float) -> 
     d, e = scale * s, scale * c
     xoff = params.offset_x_mm - (a * cx + b * cy)
     yoff = params.offset_y_mm - (d * cx + e * cy)
-    matrix = [a, b, d, e, xoff, yoff]
+    return [a, b, d, e, xoff, yoff]
 
-    parts = []
-    for poly in polygons:
-        transformed = affinity.affine_transform(poly, matrix)
-        parts.append(_extrude_polygon(transformed, height))
+
+def _extrude_shapes(shapes: list, matrix: list[float], height: float) -> trimesh.Trimesh:
+    parts = [_extrude_polygon(affinity.affine_transform(s.polygon, matrix), height)
+             for s in shapes]
     return trimesh.util.concatenate(parts) if len(parts) > 1 else parts[0]
+
+
+def _logo_local_mesh(shapes: list, params: PlacementParams, height: float) -> trimesh.Trimesh:
+    """Extruded logo in its own local XY frame, centered on (0,0), z in
+    [0, height]. Scale is derived from `width_mm` vs. the SVG's own bbox."""
+    return _extrude_shapes(shapes, _placement_matrix(shapes, params), height)
+
+
+def _by_color(shapes: list) -> dict[str, list]:
+    groups: dict[str, list] = {}
+    for s in shapes:
+        groups.setdefault(s.color, []).append(s)
+    return groups
+
+
+def _logo_meshes_by_color(shapes: list, params: PlacementParams,
+                           height: float) -> dict[str, trimesh.Trimesh]:
+    """One extruded mesh per fill color, all sharing the whole logo's
+    placement — each becomes its own object in the 3MF so a slicer can put
+    a different filament in each."""
+    matrix = _placement_matrix(shapes, params)
+    return {color: _extrude_shapes(group, matrix, height)
+            for color, group in _by_color(shapes).items()}
 
 
 def _to_world(mesh: trimesh.Trimesh, face: FaceInfo, z_shift: float) -> trimesh.Trimesh:
@@ -605,33 +771,42 @@ def _to_world(mesh: trimesh.Trimesh, face: FaceInfo, z_shift: float) -> trimesh.
     return mesh
 
 
-def preview_logo(polygons: list, face: FaceInfo, params: PlacementParams,
+def preview_logo(shapes: list, face: FaceInfo, params: PlacementParams,
                   thickness: float = 0.6) -> trimesh.Trimesh:
     """Thin slab sitting just above the surface — fast to recompute on every
-    slider tweak, purely for visual placement feedback."""
-    local = _logo_local_mesh(polygons, params, thickness)
+    slider tweak, purely for visual placement feedback. Painted with each
+    shape's own fill color so the preview shows the real multi-color logo."""
+    matrix = _placement_matrix(shapes, params)
+    meshes, colors = [], []
+    for color, group in _by_color(shapes).items():
+        m = _extrude_shapes(group, matrix, thickness)
+        meshes.append(m)
+        colors.append(np.tile(np.array([*_hex_to_rgb(color), 255], dtype=np.uint8),
+                               (len(m.faces), 1)))
+    local = trimesh.util.concatenate(meshes) if len(meshes) > 1 else meshes[0]
+    local.visual.face_colors = np.vstack(colors)
     return _to_world(local, face, z_shift=0.05)
 
 
-def emboss(polygons: list, face: FaceInfo, params: PlacementParams,
-           depth_mm: float, sink_mm: float) -> trimesh.Trimesh:
-    """The logo as a standalone, raised object. `sink_mm` buries a sliver of
-    its base in the model so the two parts overlap (and bond) instead of
-    merely touching."""
+def emboss(shapes: list, face: FaceInfo, params: PlacementParams,
+           depth_mm: float, sink_mm: float) -> dict[str, trimesh.Trimesh]:
+    """The logo as standalone raised objects, one per fill color. `sink_mm`
+    buries a sliver of each in the model so the parts overlap (and bond)
+    instead of merely touching."""
     height = depth_mm + sink_mm
-    local = _logo_local_mesh(polygons, params, height)
-    return _to_world(local, face, z_shift=-sink_mm)
+    return {color: _to_world(mesh, face, z_shift=-sink_mm)
+            for color, mesh in _logo_meshes_by_color(shapes, params, height).items()}
 
 
-def deboss(base: trimesh.Trimesh, polygons: list, face: FaceInfo, params: PlacementParams,
+def deboss(base: trimesh.Trimesh, shapes: list, face: FaceInfo, params: PlacementParams,
            depth_mm: float, fill_extra_mm: float = 0.0
-           ) -> tuple[trimesh.Trimesh, trimesh.Trimesh]:
-    """Engrave the logo into `base` and return (pocketed_base, fill_piece).
-    The fill piece is sized to exactly occupy the pocket (plus `fill_extra_mm`
-    proud of the surface), so it can be printed in a different filament and
-    fits back in. Requires `manifold3d` for the boolean cut."""
+           ) -> tuple[trimesh.Trimesh, dict[str, trimesh.Trimesh]]:
+    """Engrave the logo into `base` and return (pocketed_base, fills_by_color).
+    One pocket is cut for the whole logo; the fill pieces are split per color
+    so each can print in its own filament and drop back into the pocket.
+    Requires `manifold3d` for the boolean cut."""
     cut_over = max(1.0, depth_mm * 0.5)  # tool must poke out past the surface to cut cleanly
-    tool_local = _logo_local_mesh(polygons, params, depth_mm + cut_over)
+    tool_local = _logo_local_mesh(shapes, params, depth_mm + cut_over)
     tool = _to_world(tool_local, face, z_shift=-depth_mm)
     # STL/OBJ triangles are usually unwelded (each face owns private vertex
     # copies), so an un-merged mesh never satisfies is_volume even when it is
@@ -649,9 +824,10 @@ def deboss(base: trimesh.Trimesh, polygons: list, face: FaceInfo, params: Placem
     if pocketed.is_empty:
         raise MeshError("la découpe a supprimé tout le modèle — logo trop grand/profond ?")
 
-    fill_local = _logo_local_mesh(polygons, params, depth_mm + fill_extra_mm)
-    fill = _to_world(fill_local, face, z_shift=-depth_mm)
-    return pocketed, fill
+    fills = {color: _to_world(mesh, face, z_shift=-depth_mm)
+             for color, mesh in _logo_meshes_by_color(
+                 shapes, params, depth_mm + fill_extra_mm).items()}
+    return pocketed, fills
 
 
 # --- export ------------------------------------------------------------------

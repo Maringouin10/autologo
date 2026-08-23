@@ -32,17 +32,22 @@ viewerEl.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
-scene.add(new THREE.HemisphereLight(0xffffff, 0x444455, 1.0));
-const keyLight = new THREE.DirectionalLight(0xffffff, 1.6);
+// Bright, evenly-lit rig: renderer tone-mapping keeps the highlights from
+// blowing out even with the much stronger lights below.
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+scene.add(new THREE.AmbientLight(0xffffff, 1.1));
+scene.add(new THREE.HemisphereLight(0xffffff, 0x556070, 2.0));
+const keyLight = new THREE.DirectionalLight(0xffffff, 3.0);
 keyLight.position.set(100, 200, 150);
 scene.add(keyLight);
 // A single key light flattens relief into a silhouette — a dimmer light
 // from the opposite side gives every facet its own shade instead of one
 // flat tone, which is what actually makes bumps/engraving readable.
-const fillLight = new THREE.DirectionalLight(0xaac4ff, 0.6);
+const fillLight = new THREE.DirectionalLight(0xcfe0ff, 1.5);
 fillLight.position.set(-120, 60, -100);
 scene.add(fillLight);
-const rimLight = new THREE.DirectionalLight(0xffffff, 0.4);
+const rimLight = new THREE.DirectionalLight(0xffffff, 1.2);
 rimLight.position.set(0, -150, 50);
 scene.add(rimLight);
 const grid = new THREE.GridHelper(400, 40, 0x2a2f3a, 0x1c2029);
@@ -79,6 +84,16 @@ const previewMaterial = new THREE.MeshStandardMaterial({
   color: 0x36d17a, metalness: 0.1, roughness: 0.5,
   transparent: true, opacity: 0.9, depthTest: true,
 });
+// The preview GLB carries each color group's real fill as vertex colors —
+// show them (white base, or it would tint what's baked in) so a multi-color
+// logo previews in its actual colors instead of one flat green.
+const coloredPreviewMaterial = new THREE.MeshStandardMaterial({
+  color: 0xffffff, metalness: 0.1, roughness: 0.5,
+  transparent: true, opacity: 0.95, depthTest: true, vertexColors: true,
+});
+function pickPreviewMaterial(mesh) {
+  return mesh.geometry.attributes.color ? coloredPreviewMaterial : previewMaterial;
+}
 
 let modelObject = null;   // THREE.Mesh of the loaded base model
 let modelEdges = null;    // THREE.LineSegments outlining modelObject's facets
@@ -128,7 +143,7 @@ function loadPreviewGlb(arrayBuffer) {
     let mesh = null;
     gltf.scene.traverse((obj) => { if (!mesh && obj.isMesh) mesh = obj; });
     if (!mesh) return;
-    mesh.material = previewMaterial;
+    mesh.material = pickPreviewMaterial(mesh);
     scene.add(mesh);
     previewObject = mesh;
   });
@@ -236,7 +251,10 @@ function ringsToPathD(rings) {
   }).join(" ");
 }
 
-function shapeSvg(shapes, cssClass) {
+// One <path> per shape, each filled with the color parsed from the SVG,
+// so the picker and the combined preview show the logo as it will print
+// rather than a single flat silhouette.
+function shapeSvg(shapes) {
   if (!shapes.length) return "";
   const minx = Math.min(...shapes.map((s) => s.bbox[0]));
   const miny = Math.min(...shapes.map((s) => s.bbox[1]));
@@ -245,9 +263,10 @@ function shapeSvg(shapes, cssClass) {
   const w = Math.max(maxx - minx, 1e-3), h = Math.max(maxy - miny, 1e-3);
   const pad = Math.max(w, h) * 0.08;
   const vb = `${minx - pad} ${miny - pad} ${w + 2 * pad} ${h + 2 * pad}`;
-  const path = shapes.map((s) => ringsToPathD(s.rings)).join(" ");
-  return `<svg viewBox="${vb}" preserveAspectRatio="xMidYMid meet">` +
-    `<path class="${cssClass}" fill-rule="evenodd" d="${path}"/></svg>`;
+  const paths = shapes.map((s) =>
+    `<path fill="${s.color || "#36d17a"}" fill-rule="evenodd" d="${ringsToPathD(s.rings)}"/>`
+  ).join("");
+  return `<svg viewBox="${vb}" preserveAspectRatio="xMidYMid meet">${paths}</svg>`;
 }
 
 function renderShapeList() {
@@ -258,7 +277,7 @@ function renderShapeList() {
     card.className = "shape-card" + (state.excluded.has(shape.index) ? " excluded" : "");
     card.innerHTML =
       `<input type="checkbox" ${state.excluded.has(shape.index) ? "" : "checked"}>` +
-      shapeSvg([shape], "shape-fill");
+      shapeSvg([shape]);
     card.querySelector("input").addEventListener("change", (e) => {
       if (e.target.checked) state.excluded.delete(shape.index);
       else state.excluded.add(shape.index);
@@ -274,7 +293,7 @@ function renderCombinedPreview() {
   const active = state.logoShapes.filter((s) => !state.excluded.has(s.index));
   const wrap = document.getElementById("combined-preview-wrap");
   wrap.innerHTML = active.length
-    ? shapeSvg(active, "shape-fill")
+    ? shapeSvg(active)
     : '<p class="hint">(aucune forme incluse)</p>';
   const svg = wrap.querySelector("svg");
   if (svg) {
