@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import math
+import re
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass, field
@@ -268,22 +269,77 @@ def _normalize_color(raw: str | None) -> str | None:
     return DEFAULT_LOGO_COLOR
 
 
-def _element_fill(el, inherited: str | None) -> str | None:
-    style = el.get("style") or ""
+def _fill_from_style(style: str) -> str | None:
+    """`fill` out of a CSS declaration list (`fill:#abc;stroke:none`)."""
     for decl in style.split(";"):
         if ":" in decl:
             k, v = decl.split(":", 1)
-            if k.strip() == "fill":
+            if k.strip().lower() == "fill":
                 return v.strip()
-    return el.get("fill") or inherited
+    return None
 
 
-def _collect_svg_shapes(el, inherited: str | None, out: list) -> list:
-    fill = _element_fill(el, inherited)
+def _parse_stylesheet(root) -> dict[str, dict[str, str]]:
+    """Collect `fill` rules out of the document's `<style>` blocks, keyed by
+    selector kind. Illustrator (and Figma, and "optimized" SVGs generally)
+    export color as CSS classes — `.cls-1{fill:#e4002b}` — never as a `fill`
+    attribute, so without this every such logo came through as one default
+    color. Only the flat selector forms exporters actually emit are
+    supported: `.class`, `#id`, `tag`, and comma-separated lists of those."""
+    rules = {"class": {}, "id": {}, "tag": {}}
+    for style_el in root.iter(f"{{{_SVG_NS}}}style"):
+        css = "".join(style_el.itertext())
+        css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+        for block in css.split("}"):
+            if "{" not in block:
+                continue
+            selectors, _, decls = block.partition("{")
+            fill = _fill_from_style(decls)
+            if not fill:
+                continue
+            for sel in selectors.split(","):
+                sel = sel.strip()
+                # A compound/descendant selector (".a .b", "g > path") can't be
+                # resolved without a real CSS engine — skip rather than
+                # mis-apply it to every element that happens to match one part.
+                if not sel or any(ch in sel for ch in " >+~:["):
+                    continue
+                if sel.startswith("."):
+                    rules["class"][sel[1:]] = fill
+                elif sel.startswith("#"):
+                    rules["id"][sel[1:]] = fill
+                elif sel.isalpha():
+                    rules["tag"][sel.lower()] = fill
+    return rules
+
+
+def _element_fill(el, inherited: str | None, css: dict) -> str | None:
+    """Resolve one element's fill, in CSS precedence order (weakest first):
+    presentation attribute, then stylesheet rules by specificity
+    (tag < class < id), then the inline `style` attribute."""
+    fill = el.get("fill")
+    tag = el.tag.split("}")[-1].lower()
+    if tag in css["tag"]:
+        fill = css["tag"][tag]
+    for cls in (el.get("class") or "").split():
+        if cls in css["class"]:
+            fill = css["class"][cls]
+    if el.get("id") in css["id"]:
+        fill = css["id"][el.get("id")]
+    inline = _fill_from_style(el.get("style") or "")
+    if inline:
+        fill = inline
+    if fill is None or fill.strip().lower() in ("inherit", "currentcolor"):
+        return inherited
+    return fill
+
+
+def _collect_svg_shapes(el, inherited: str | None, css: dict, out: list) -> list:
+    fill = _element_fill(el, inherited, css)
     if el.tag.split("}")[-1] in _SVG_SHAPE_TAGS:
         out.append((el, fill))
     for child in el:
-        _collect_svg_shapes(child, fill, out)
+        _collect_svg_shapes(child, fill, css, out)
     return out
 
 
@@ -343,7 +399,7 @@ def load_logo(path: str) -> list:
     except Exception as exc:
         raise MeshError(f"impossible de lire le SVG ({exc})") from exc
 
-    elements = _collect_svg_shapes(root, None, [])
+    elements = _collect_svg_shapes(root, None, _parse_stylesheet(root), [])
     if not elements:
         raise MeshError(
             "le SVG ne contient aucune forme reconnue. S'il contient du "

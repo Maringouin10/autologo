@@ -109,7 +109,11 @@ filament/color to each.
   region's *actual outline*, not its bounding box — a round or L-shaped
   spot is smaller than the rectangle around it — with a 1&nbsp;mm clearance
   on every side.
-- **A logo SVG may use up to 3 colors.** Each element's `fill` is read and
+- **A logo SVG may use up to 3 colors.** Fills are read from `fill`
+  attributes, inline `style="fill:…"`, **and `<style>` blocks with class /
+  id / element selectors** (how Illustrator, Figma and most "optimized"
+  SVG exports actually store color), following normal CSS precedence and
+  group inheritance. Each element's resolved fill is read and
   every distinct color becomes its own object in the exported 3MF
   (`logo_1_ff0000`, `logo_2_0000ff`, …) so you can assign one filament per
   color in the slicer; all groups share one placement, so they stay in
