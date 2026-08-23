@@ -515,25 +515,36 @@ def admin_create_product():
     try:
         db.create_product(product_id, name, sess.model_ext, export_mode, bounds_json, colors_json)
         for i, z in enumerate(zones_in):
-            face = z.get("face") or {}
-            for key in ("origin", "normal", "u", "v", "width", "height"):
-                if key not in face:
-                    raise ValueError(f"zone {i + 1}: information de face incomplète")
+            # Resolve the face SERVER-side from its index rather than trusting
+            # whatever geometry the client echoes back. The browser only ever
+            # needs origin/normal/u/v to draw its marker, and it used to send
+            # exactly those back — silently dropping `outline`, so every real
+            # zone fell back to "the region is its own bounding rectangle" and
+            # fit-to-plate oversized logos off the edge of any non-rectangular
+            # (e.g. round-cornered) plate. Recomputing here means the stored
+            # face is always complete, whatever the client sends.
+            try:
+                face_index = int(z["face_index"])
+            except (KeyError, TypeError, ValueError):
+                raise ValueError(f"zone {i + 1}: face_index manquant/invalide")
+            info = mw.find_flat_region(sess.mesh(), sess.face_adjacency(), face_index)
+            part = mw.part_for_face(sess.parts, face_index)
             mode = z.get("mode", "emboss")
             if mode not in ("emboss", "deboss"):
                 raise ValueError(f"zone {i + 1}: mode invalide")
             db.add_zone(
                 product_id=product_id,
-                part_name=str(z.get("part_name", "")),
+                part_name=part["name"],
                 label=str(z.get("label") or f"Zone {i + 1}"),
-                face_json=json.dumps(face),
+                face_index=face_index,
+                face_json=json.dumps(info.to_json()),
                 mode=mode,
                 depth_mm=max(0.1, float(z.get("depth_mm", 1.5))),
                 sink_mm=max(0.0, float(z.get("sink_mm", 0.3))),
                 fill_extra_mm=max(0.0, float(z.get("fill_extra_mm", 0.0))),
                 sort_order=i,
             )
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, mw.MeshError) as exc:
         db.delete_product(product_id)
         shutil.rmtree(pdir, ignore_errors=True)
         return _err(exc)
@@ -677,7 +688,7 @@ def order_preview(order_session_id, zone_id):
         return _err(ValueError(f"paramètres invalides ({exc})"))
 
     try:
-        face = mw.FaceInfo.from_json(json.loads(zone_row["face_json"]))
+        face = orders.zone_face(zone_row, db.get_product(sess.product_id))
         mesh = mw.preview_logo(work.active_logo_polygons(), face, work.placement_params())
     except mw.MeshError as exc:
         return _err(exc)
@@ -692,7 +703,7 @@ def order_fit(order_session_id, zone_id):
     if not work.has_logo():
         return _err(ValueError("aucun logo importé pour cette zone"))
     try:
-        face = mw.FaceInfo.from_json(json.loads(zone_row["face_json"]))
+        face = orders.zone_face(zone_row, db.get_product(sess.product_id))
         width_mm, rotation_deg = mw.fit_to_face(work.active_logo_polygons(), face)
     except mw.MeshError as exc:
         return _err(exc)

@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS zones (
     product_id    TEXT NOT NULL REFERENCES products(id),
     part_name     TEXT NOT NULL,
     label         TEXT NOT NULL,
-    face_json     TEXT NOT NULL,   -- serialized meshwork.FaceInfo (origin/normal/u/v/width/height)
+    face_index    INTEGER NOT NULL DEFAULT -1,  -- triangle the vendor clicked; -1 = legacy zone
+    face_json     TEXT NOT NULL,   -- serialized meshwork.FaceInfo (origin/normal/u/v/width/height/outline)
     mode          TEXT NOT NULL,   -- emboss | deboss — vendor-locked, never shown to the customer
     depth_mm      REAL NOT NULL,
     sink_mm       REAL NOT NULL DEFAULT 0.3,
@@ -57,6 +58,7 @@ _MIGRATIONS = {
         "colors_json": "TEXT NOT NULL DEFAULT '{}'",
     },
     "orders": {"status": "TEXT NOT NULL DEFAULT 'new'"},
+    "zones": {"face_index": "INTEGER NOT NULL DEFAULT -1"},
 }
 
 
@@ -121,15 +123,24 @@ def delete_product(product_id: str) -> None:
 
 # --- zones -----------------------------------------------------------------
 def add_zone(product_id: str, part_name: str, label: str, face_json: str, mode: str,
-             depth_mm: float, sink_mm: float, fill_extra_mm: float, sort_order: int) -> int:
+             depth_mm: float, sink_mm: float, fill_extra_mm: float, sort_order: int,
+             face_index: int = -1) -> int:
     with get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO zones (product_id, part_name, label, face_json, mode, depth_mm, "
-            "sink_mm, fill_extra_mm, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (product_id, part_name, label, face_json, mode, depth_mm, sink_mm,
+            "INSERT INTO zones (product_id, part_name, label, face_index, face_json, mode, "
+            "depth_mm, sink_mm, fill_extra_mm, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (product_id, part_name, label, face_index, face_json, mode, depth_mm, sink_mm,
              fill_extra_mm, sort_order),
         )
         return cur.lastrowid
+
+
+def update_zone_face(zone_id: int, face_json: str, face_index: int) -> None:
+    """Persist a repaired face (see main._zone_face) so the recomputation
+    only ever happens once per legacy zone."""
+    with get_conn() as conn:
+        conn.execute("UPDATE zones SET face_json = ?, face_index = ? WHERE id = ?",
+                      (face_json, face_index, zone_id))
 
 
 def list_zones(product_id: str) -> list[sqlite3.Row]:

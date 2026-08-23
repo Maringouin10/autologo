@@ -614,6 +614,30 @@ def find_flat_region(mesh: trimesh.Trimesh, face_adjacency: np.ndarray, face_ind
                      face_count=len(region), outline=outline)
 
 
+def locate_face_index(mesh: trimesh.Trimesh, origin, normal) -> int:
+    """Find the triangle a stored FaceInfo came from, by matching its plane.
+
+    Used to repair zones saved before the region outline was recorded: the
+    origin/normal are known, so the flat patch can be re-derived (and its
+    real outline computed) without asking the vendor to rebuild the
+    product. Picks, among triangles facing the same way and lying on the
+    same plane, the one whose center is nearest the stored origin."""
+    origin = np.asarray(origin, dtype=np.float64)
+    normal = np.asarray(normal, dtype=np.float64)
+    normals, centers = mesh.face_normals, mesh.triangles_center
+    scale = float(mesh.scale) if mesh.scale else 1.0
+    plane_tol = max(scale * PLANE_TOL_FRAC, 1e-4)
+
+    aligned = normals @ normal >= math.cos(math.radians(NORMAL_TOL_DEG))
+    on_plane = np.abs((centers - origin) @ normal) <= plane_tol
+    candidates = np.flatnonzero(aligned & on_plane)
+    if len(candidates) == 0:
+        candidates = np.flatnonzero(aligned)
+    if len(candidates) == 0:
+        raise MeshError("impossible de retrouver la face d'origine de cette zone")
+    return int(candidates[np.argmin(np.linalg.norm(centers[candidates] - origin, axis=1))])
+
+
 def _region_outline(pu: np.ndarray, pv: np.ndarray,
                      center_u: float, center_v: float) -> list | None:
     """Merge a flat region's triangles (already projected onto its own u/v

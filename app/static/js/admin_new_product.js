@@ -242,6 +242,10 @@ document.getElementById("add-zone-btn").addEventListener("click", () => {
     depth_mm: parseFloat(zoneSliders.depth.value),
     sink_mm: parseFloat(zoneSliders.sink.value),
     fill_extra_mm: parseFloat(zoneSliders.fill.value),
+    // Only the index goes to the server — it re-resolves the face itself, so
+    // the stored zone can't be missing anything the client didn't echo back.
+    face_index: state.currentFace.face_index,
+    // kept locally just to draw the zone marker in the viewer
     face: {
       origin: state.currentFace.origin, normal: state.currentFace.normal,
       u: state.currentFace.u, v: state.currentFace.v,
@@ -273,8 +277,8 @@ document.getElementById("publish-btn").addEventListener("click", async () => {
         session_id: state.sessionId,
         name: document.getElementById("product-name").value.trim(),
         export_mode: document.getElementById("export-mode").value,
-        zones: state.zones.map(({ label, part_name, mode, depth_mm, sink_mm, fill_extra_mm, face }) =>
-          ({ label, part_name, mode, depth_mm, sink_mm, fill_extra_mm, face })),
+        zones: state.zones.map(({ label, mode, depth_mm, sink_mm, fill_extra_mm, face_index }) =>
+          ({ label, mode, depth_mm, sink_mm, fill_extra_mm, face_index })),
       }),
     });
     const data = await readJson(res);

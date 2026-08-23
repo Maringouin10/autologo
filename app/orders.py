@@ -120,6 +120,34 @@ def start_cleanup_thread() -> None:
     threading.Thread(target=cleanup_loop, daemon=True).start()
 
 
+def zone_face(zone_row, product) -> "mw.FaceInfo":
+    """The zone's FaceInfo, repairing it in place if it predates the stored
+    region outline. Zones saved by the old admin UI kept only the bounding
+    box, which makes fit-to-plate oversize a logo off the edge of any
+    non-rectangular (round-cornered, L-shaped…) plate. The face is re-derived
+    from the product's own model and written back, so this costs one mesh
+    load once per legacy zone, then never again."""
+    data = json.loads(zone_row["face_json"])
+    if data.get("outline"):
+        return mw.FaceInfo.from_json(data)
+
+    model_path = config.PRODUCTS_DIR / product["id"] / f"model{product['model_ext']}"
+    if not model_path.exists():
+        return mw.FaceInfo.from_json(data)
+    try:
+        combined, parts, _ = mw.load_assembly(str(model_path), product["model_ext"])
+        adjacency = mw.part_isolated_adjacency(combined, parts)
+        face_index = zone_row["face_index"]
+        if face_index is None or face_index < 0 or face_index >= len(combined.faces):
+            face_index = mw.locate_face_index(combined, data["origin"], data["normal"])
+        info = mw.find_flat_region(combined, adjacency, face_index)
+    except (mw.MeshError, KeyError, OSError):
+        return mw.FaceInfo.from_json(data)   # keep the old behaviour rather than failing
+
+    db.update_zone_face(zone_row["id"], json.dumps(info.to_json()), face_index)
+    return info
+
+
 def _new_order_code() -> str:
     alphabet = string.ascii_uppercase + string.digits
     for _ in range(20):
@@ -158,7 +186,7 @@ def submit(sess: OrderSession) -> str:
         part_name = row["part_name"]
         if part_name not in working_parts:
             raise mw.MeshError(f"pièce '{part_name}' introuvable dans le modèle")
-        face = mw.FaceInfo.from_json(json.loads(row["face_json"]))
+        face = zone_face(row, product)
         shapes = work.active_logo_polygons()
         params = work.placement_params()
         touched_parts.add(part_name)
