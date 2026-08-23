@@ -206,55 +206,6 @@ wireDropzone(logoDrop, logoInput, async (file) => {
   }
 });
 
-// --- face picking ---------------------------------------------------------------
-const raycaster = new THREE.Raycaster();
-const pointer = new THREE.Vector2();
-
-renderer.domElement.addEventListener("click", async (ev) => {
-  if (!modelObject) return;
-  if (!state.hasLogo) {
-    setError("importez d'abord un logo SVG avant de sélectionner une face.");
-    return;
-  }
-  const rect = renderer.domElement.getBoundingClientRect();
-  pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-  pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
-  raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObject(modelObject, false);
-  if (!hits.length || hits[0].faceIndex == null) {
-    setError("aucune surface touchée à cet endroit — cliquez directement sur le modèle.");
-    return;
-  }
-
-  setError("");
-  document.getElementById("face-info").textContent = "Analyse de la face…";
-  try {
-    const res = await fetch(`/api/session/${state.sessionId}/face`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ face_index: hits[0].faceIndex }),
-    });
-    const data = await readJson(res);
-    if (!res.ok) throw new Error(data.error || "échec de la sélection de face");
-    state.faceIndex = data.face_index;
-    state.faceInfo = data;
-    document.getElementById("face-info").textContent =
-      `Face plate: ${data.width.toFixed(1)} × ${data.height.toFixed(1)} mm ` +
-      `(${data.face_count} triangles)`;
-    const widthSlider = document.getElementById("width");
-    widthSlider.max = Math.max(data.width, data.height) * 1.5;
-    widthSlider.value = data.suggested_width_mm;
-    enableStep("step-placement", true);
-    enableStep("step-mode", true);
-    enableStep("step-export", true);
-    document.getElementById("export-btn").removeAttribute("disabled");
-    updateReadout();
-    requestPreview();
-  } catch (err) {
-    document.getElementById("face-info").textContent = "Aucune face sélectionnée.";
-    setError(err.message);
-  }
-});
-
 // --- placement sliders ----------------------------------------------------------
 const sliders = {
   width: document.getElementById("width"),
@@ -285,10 +236,11 @@ function schedulePreview() {
 
 async function requestPreview() {
   if (!state.sessionId || state.faceIndex == null) return;
+  const placement = currentPlacement();
   try {
     const res = await fetch(`/api/session/${state.sessionId}/preview`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(currentPlacement()),
+      body: JSON.stringify(placement),
     });
     if (!res.ok) {
       const data = await readJson(res);
@@ -296,6 +248,10 @@ async function requestPreview() {
     }
     const buf = await res.arrayBuffer();
     loadPreviewGlb(buf);
+    // The freshly loaded mesh's vertices already bake in this exact offset,
+    // so instantaneous drag-feedback (see applyDragOffset) starts measuring
+    // its on-screen delta from here, not from (0,0).
+    previewBaseOffset = { x: placement.offset_x_mm, y: placement.offset_y_mm };
   } catch (err) {
     setError(err.message);
   }
@@ -315,6 +271,143 @@ function currentPlacement() {
   el.addEventListener("input", schedulePreview));
 [sliders.depth, sliders.sink, sliders.fill].forEach((el) =>
   el.addEventListener("input", updateReadout));
+
+// --- face picking & drag-to-position ---------------------------------------------
+// Clicking an unpicked area of the model selects the flat face under the
+// cursor (as before). Once a logo preview sits on that face, grabbing the
+// preview itself and dragging repositions it in real time — far more
+// precise by eye than typing/nudging the offset sliders, which stay in
+// sync (and still work) for exact numeric entry.
+const raycaster = new THREE.Raycaster();
+const CLICK_MOVE_THRESHOLD = 5; // px of pointer travel beyond which a press counts as a drag, not a click
+
+let facePlane = null;                        // THREE.Plane of the selected flat region, world space
+let faceOrigin = null, faceU = null, faceV = null; // THREE.Vector3
+let dragging = false;
+let pointerDownAt = { x: 0, y: 0 };
+let previewBaseOffset = { x: 0, y: 0 };       // offset the CURRENT previewObject's geometry was built at
+
+function ndcFromEvent(ev) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  return new THREE.Vector2(
+    ((ev.clientX - rect.left) / rect.width) * 2 - 1,
+    -((ev.clientY - rect.top) / rect.height) * 2 + 1,
+  );
+}
+
+function faceOffsetFromPointer(ev) {
+  raycaster.setFromCamera(ndcFromEvent(ev), camera);
+  const hit = new THREE.Vector3();
+  if (!raycaster.ray.intersectPlane(facePlane, hit)) return null;
+  const rel = hit.sub(faceOrigin);
+  return { x: rel.dot(faceU), y: rel.dot(faceV) };
+}
+
+function applyDragOffset(off) {
+  const dx = Math.max(Number(sliders.dx.min), Math.min(Number(sliders.dx.max), off.x));
+  const dy = Math.max(Number(sliders.dy.min), Math.min(Number(sliders.dy.max), off.y));
+  sliders.dx.value = dx;
+  sliders.dy.value = dy;
+  updateReadout();
+  // Instant, purely client-side feedback: slide the already-loaded preview
+  // mesh by the delta from where its geometry was actually baked, so it
+  // tracks the cursor with zero latency. schedulePreview() (below) fetches
+  // the authoritative re-extruded mesh shortly after movement settles.
+  if (previewObject) {
+    previewObject.position
+      .copy(faceU).multiplyScalar(dx - previewBaseOffset.x)
+      .addScaledVector(faceV, dy - previewBaseOffset.y);
+  }
+  schedulePreview();
+}
+
+function onDragMove(ev) {
+  const off = faceOffsetFromPointer(ev);
+  if (off) applyDragOffset(off);
+}
+
+function onDragEnd() {
+  window.removeEventListener("pointermove", onDragMove);
+  if (!dragging) return;
+  dragging = false;
+  controls.enabled = true;
+  hintEl.textContent = "Glissez le logo pour l'ajuster, ou cliquez ailleurs pour changer de face.";
+}
+
+// A drag that barely moves (a precise nudge) still ends with a native
+// 'click' firing right after 'pointerup' — by then `dragging` is already
+// back to false, so the click's own movement check can't tell it apart
+// from a real click. Flag it explicitly at drag-start instead, and
+// consume the flag once, so even a 2px nudge can't be mistaken for a
+// request to re-pick the face (which would silently discard it).
+let suppressNextClick = false;
+
+renderer.domElement.addEventListener("pointerdown", (ev) => {
+  pointerDownAt = { x: ev.clientX, y: ev.clientY };
+  if (!modelObject || !previewObject || !facePlane) return;
+  raycaster.setFromCamera(ndcFromEvent(ev), camera);
+  if (!raycaster.intersectObject(previewObject, false).length) return;
+
+  dragging = true;
+  suppressNextClick = true;
+  controls.enabled = false;
+  hintEl.textContent = "Glissez pour positionner le logo…";
+  window.addEventListener("pointermove", onDragMove);
+  window.addEventListener("pointerup", onDragEnd, { once: true });
+});
+
+renderer.domElement.addEventListener("click", async (ev) => {
+  if (suppressNextClick) { suppressNextClick = false; return; }
+  if (!modelObject) return;
+  if (Math.hypot(ev.clientX - pointerDownAt.x, ev.clientY - pointerDownAt.y) > CLICK_MOVE_THRESHOLD) return;
+  if (!state.hasLogo) {
+    setError("importez d'abord un logo SVG avant de sélectionner une face.");
+    return;
+  }
+  raycaster.setFromCamera(ndcFromEvent(ev), camera);
+  const hits = raycaster.intersectObject(modelObject, false);
+  if (!hits.length || hits[0].faceIndex == null) {
+    setError("aucune surface touchée à cet endroit — cliquez directement sur le modèle.");
+    return;
+  }
+
+  setError("");
+  document.getElementById("face-info").textContent = "Analyse de la face…";
+  try {
+    const res = await fetch(`/api/session/${state.sessionId}/face`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ face_index: hits[0].faceIndex }),
+    });
+    const data = await readJson(res);
+    if (!res.ok) throw new Error(data.error || "échec de la sélection de face");
+    state.faceIndex = data.face_index;
+    state.faceInfo = data;
+    faceOrigin = new THREE.Vector3(...data.origin);
+    faceU = new THREE.Vector3(...data.u);
+    faceV = new THREE.Vector3(...data.v);
+    facePlane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+      new THREE.Vector3(...data.normal), faceOrigin);
+    document.getElementById("face-info").textContent =
+      `Face plate: ${data.width.toFixed(1)} × ${data.height.toFixed(1)} mm ` +
+      `(${data.face_count} triangles)`;
+    const span = Math.max(data.width, data.height);
+    const widthSlider = document.getElementById("width");
+    widthSlider.max = span * 1.5;
+    widthSlider.value = data.suggested_width_mm;
+    sliders.dx.min = -span; sliders.dx.max = span; sliders.dx.value = 0;
+    sliders.dy.min = -span; sliders.dy.max = span; sliders.dy.value = 0;
+    enableStep("step-placement", true);
+    enableStep("step-mode", true);
+    enableStep("step-export", true);
+    document.getElementById("export-btn").removeAttribute("disabled");
+    updateReadout();
+    requestPreview();
+    hintEl.textContent = "Glissez le logo pour l'ajuster, ou cliquez ailleurs pour changer de face.";
+  } catch (err) {
+    document.getElementById("face-info").textContent = "Aucune face sélectionnée.";
+    setError(err.message);
+  }
+});
 
 // --- mode toggle ------------------------------------------------------------
 document.querySelectorAll('input[name=mode]').forEach((radio) => {
