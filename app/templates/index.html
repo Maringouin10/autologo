@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoLogo</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>🏷️ AutoLogo</h1>
+    <span class="muted">Logo SVG → face plate → export 3MF (objets séparés, prêt multi-couleur)</span>
+    <a class="logout" href="{{ url_for('logout') }}">Déconnexion</a>
+  </header>
+
+  <main class="layout">
+    <aside class="panel">
+      <section class="step" id="step-model">
+        <h2>1. Modèle 3D</h2>
+        <label class="dropzone" id="model-drop">
+          <input type="file" id="model-input" accept=".stl,.obj,.ply,.3mf,.off" hidden>
+          <span id="model-drop-label">STL / OBJ / 3MF / PLY — cliquez ou déposez</span>
+        </label>
+        <p class="hint" id="model-info"></p>
+      </section>
+
+      <section class="step" id="step-logo" disabled>
+        <h2>2. Logo (SVG)</h2>
+        <label class="dropzone" id="logo-drop">
+          <input type="file" id="logo-input" accept=".svg" hidden>
+          <span id="logo-drop-label">Fichier .svg — cliquez ou déposez</span>
+        </label>
+        <p class="hint" id="logo-info"></p>
+      </section>
+
+      <section class="step" id="step-face" disabled>
+        <h2>3. Face</h2>
+        <p class="hint">Cliquez sur une face <b>plate</b> du modèle, dans la vue 3D.</p>
+        <p class="hint" id="face-info">Aucune face sélectionnée.</p>
+      </section>
+
+      <section class="step" id="step-placement" disabled>
+        <h2>4. Placement</h2>
+        <div class="field">
+          <label>Largeur (mm) <span id="width-val"></span></label>
+          <input type="range" id="width" min="1" max="500" step="0.5">
+        </div>
+        <div class="field">
+          <label>Rotation (°) <span id="rot-val"></span></label>
+          <input type="range" id="rot" min="0" max="360" step="1" value="0">
+        </div>
+        <div class="field">
+          <label>Décalage X (mm) <span id="dx-val"></span></label>
+          <input type="range" id="dx" min="-100" max="100" step="0.2" value="0">
+        </div>
+        <div class="field">
+          <label>Décalage Y (mm) <span id="dy-val"></span></label>
+          <input type="range" id="dy" min="-100" max="100" step="0.2" value="0">
+        </div>
+      </section>
+
+      <section class="step" id="step-mode" disabled>
+        <h2>5. Mode d'impression</h2>
+        <div class="mode-choice">
+          <label><input type="radio" name="mode" value="emboss" checked> Relief (logo en saillie)</label>
+          <label><input type="radio" name="mode" value="deboss"> Gravé (logo creusé + pièce de remplissage)</label>
+        </div>
+        <div class="field">
+          <label>Profondeur (mm) <span id="depth-val"></span></label>
+          <input type="range" id="depth" min="0.2" max="10" step="0.1" value="1.5">
+        </div>
+        <div class="field" id="field-sink">
+          <label>Ancrage dans le modèle (mm) <span id="sink-val"></span></label>
+          <input type="range" id="sink" min="0" max="3" step="0.05" value="0.3">
+        </div>
+        <div class="field hidden" id="field-fill">
+          <label>Saillie de la pièce de remplissage (mm) <span id="fill-val"></span></label>
+          <input type="range" id="fill" min="0" max="2" step="0.05" value="0">
+        </div>
+        <p class="hint">
+          <b>Relief</b> : le logo est un objet séparé posé sur la surface —
+          robuste, fonctionne sur n'importe quel modèle.<br>
+          <b>Gravé</b> : le logo est creusé dans le modèle, avec une pièce qui
+          comble exactement le creux — nécessite un modèle étanche
+          ("watertight").
+        </p>
+      </section>
+
+      <section class="step" id="step-export" disabled>
+        <button id="export-btn">⬇ Exporter en 3MF</button>
+        <p class="hint error" id="export-error"></p>
+      </section>
+    </aside>
+
+    <div class="viewer-wrap">
+      <div id="viewer"></div>
+      <div id="viewer-hint" class="viewer-hint">Importez un modèle 3D pour commencer.</div>
+    </div>
+  </main>
+
+  <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

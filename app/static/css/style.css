@@ -1,0 +1,96 @@
+:root {
+  --bg: #0f1115;
+  --panel: #161a22;
+  --border: #262c38;
+  --text: #e8eaf0;
+  --muted: #8a91a3;
+  --accent: #4f9dff;
+  --accent-dim: #2a5a99;
+  --danger: #ff6b6b;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.muted { color: var(--muted); font-size: 0.9em; }
+.hint { color: var(--muted); font-size: 0.85em; line-height: 1.4; }
+.error { color: var(--danger); }
+.hidden { display: none !important; }
+
+/* --- login --- */
+.login-body {
+  display: flex; align-items: center; justify-content: center;
+  overflow: auto; height: 100vh;
+}
+.login-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 32px; width: 320px; display: flex; flex-direction: column; gap: 12px;
+}
+.login-card h1 { margin: 0; }
+.login-card input, .login-card button {
+  padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border);
+  background: #0d0f14; color: var(--text); font-size: 1em;
+}
+.login-card button { background: var(--accent); border: none; cursor: pointer; font-weight: 600; }
+.login-card button:hover { background: var(--accent-dim); }
+
+/* --- app shell --- */
+.topbar {
+  display: flex; align-items: baseline; gap: 12px; padding: 10px 20px;
+  border-bottom: 1px solid var(--border); background: var(--panel);
+}
+.topbar h1 { margin: 0; font-size: 1.2em; }
+.topbar .logout { margin-left: auto; color: var(--muted); text-decoration: none; font-size: 0.9em; }
+.topbar .logout:hover { color: var(--text); }
+
+.layout { display: flex; height: calc(100vh - 49px); }
+
+.panel {
+  width: 320px; flex-shrink: 0; overflow-y: auto; padding: 16px;
+  border-right: 1px solid var(--border); background: var(--panel);
+}
+.step { margin-bottom: 22px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
+.step:last-child { border-bottom: none; }
+.step[disabled] { opacity: 0.35; pointer-events: none; }
+.step h2 { font-size: 0.95em; margin: 0 0 10px; color: var(--accent); }
+
+.dropzone {
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  border: 2px dashed var(--border); border-radius: 10px; padding: 18px 10px;
+  cursor: pointer; font-size: 0.85em; color: var(--muted); min-height: 50px;
+}
+.dropzone:hover { border-color: var(--accent); color: var(--text); }
+.dropzone.drag { border-color: var(--accent); background: rgba(79,157,255,0.08); }
+
+.field { margin-bottom: 12px; }
+.field label {
+  display: flex; justify-content: space-between; font-size: 0.85em;
+  color: var(--muted); margin-bottom: 4px;
+}
+.field input[type=range] { width: 100%; }
+
+.mode-choice { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; font-size: 0.88em; }
+
+#export-btn {
+  width: 100%; padding: 12px; border: none; border-radius: 8px;
+  background: var(--accent); color: #fff; font-weight: 700; font-size: 1em; cursor: pointer;
+}
+#export-btn:hover { background: var(--accent-dim); }
+#export-btn:disabled { background: var(--border); cursor: not-allowed; }
+
+.viewer-wrap { position: relative; flex: 1; }
+#viewer { position: absolute; inset: 0; }
+.viewer-hint {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  background: rgba(22,26,34,0.85); border: 1px solid var(--border);
+  padding: 6px 14px; border-radius: 20px; font-size: 0.85em; color: var(--muted);
+  pointer-events: none;
+}

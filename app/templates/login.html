@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoLogo — connexion</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="login-body">
+  <form class="login-card" method="post">
+    <h1>🏷️ AutoLogo</h1>
+    <p class="muted">Placez un logo sur un modèle 3D et exportez-le en 3MF.</p>
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}<p class="error">{{ messages[0] }}</p>{% endif %}
+    {% endwith %}
+    <input type="password" name="password" placeholder="Mot de passe" autofocus required>
+    <button type="submit">Entrer</button>
+  </form>
+</body>
+</html>

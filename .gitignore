@@ -1,0 +1,12 @@
+# Runtime data (uploaded models/logos, session cache) — never commit
+data/
+
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/

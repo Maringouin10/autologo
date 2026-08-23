@@ -1,0 +1,11 @@
+flask==3.1.*
+gunicorn==23.*
+numpy==2.*
+trimesh==5.*
+shapely==2.*
+lxml==6.*
+networkx==3.*
+rtree==1.*
+svg.path==6.*
+mapbox_earcut==2.*
+manifold3d==3.*

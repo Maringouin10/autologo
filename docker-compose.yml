@@ -1,0 +1,14 @@
+services:
+  autologo:
+    build: .
+    container_name: autologo
+    restart: unless-stopped
+    ports:
+      - "8010:8000"
+    environment:
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+      SECRET_KEY: ${SECRET_KEY:-}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-6}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-200}
+    volumes:
+      - ./data:/data
