@@ -40,10 +40,24 @@ CREATE TABLE IF NOT EXISTS orders (
     code         TEXT UNIQUE NOT NULL,
     product_id   TEXT NOT NULL REFERENCES products(id),
     created_at   TEXT NOT NULL,
-    output_path  TEXT
+    output_path  TEXT,
+    status       TEXT NOT NULL DEFAULT 'new'   -- new | done
 );
 CREATE INDEX IF NOT EXISTS idx_orders_product ON orders(product_id);
 """
+
+# Columns added after the initial release — applied to existing DBs on startup
+# (same pattern as the sibling shortgen app's db.py). `CREATE TABLE IF NOT
+# EXISTS` only creates a *new* table; a column added to SCHEMA later never
+# reaches a database whose `products`/`orders` table already existed, hence
+# these ALTER TABLEs run every startup (each one a no-op once applied).
+_MIGRATIONS = {
+    "products": {
+        "bounds_json": "TEXT NOT NULL DEFAULT '{}'",
+        "colors_json": "TEXT NOT NULL DEFAULT '{}'",
+    },
+    "orders": {"status": "TEXT NOT NULL DEFAULT 'new'"},
+}
 
 
 @contextmanager
@@ -66,6 +80,11 @@ def get_conn():
 def init_db() -> None:
     with get_conn() as conn:
         conn.executescript(SCHEMA)
+        for table, cols in _MIGRATIONS.items():
+            existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            for col, col_type in cols.items():
+                if col not in existing:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
 
 
 def _now() -> str:
@@ -140,8 +159,25 @@ def get_order(code: str) -> sqlite3.Row | None:
         return conn.execute("SELECT * FROM orders WHERE code = ?", (code,)).fetchone()
 
 
-def list_orders(product_id: str) -> list[sqlite3.Row]:
+def list_orders(product_id: str, include_done: bool = False) -> list[sqlite3.Row]:
     with get_conn() as conn:
-        return conn.execute(
-            "SELECT * FROM orders WHERE product_id = ? ORDER BY created_at DESC", (product_id,)
-        ).fetchall()
+        query = "SELECT * FROM orders WHERE product_id = ?"
+        if not include_done:
+            query += " AND status != 'done'"
+        return conn.execute(query + " ORDER BY created_at DESC", (product_id,)).fetchall()
+
+
+def list_all_orders(include_done: bool = False) -> list[sqlite3.Row]:
+    """Every order across every product, newest first, with the product's
+    name joined in — for the cross-product admin orders page."""
+    with get_conn() as conn:
+        query = ("SELECT orders.*, products.name AS product_name FROM orders "
+                 "JOIN products ON products.id = orders.product_id")
+        if not include_done:
+            query += " WHERE orders.status != 'done'"
+        return conn.execute(query + " ORDER BY orders.created_at DESC").fetchall()
+
+
+def mark_order_done(code: str) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE orders SET status = 'done' WHERE code = ?", (code,))

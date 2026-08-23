@@ -25,7 +25,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from . import config, db, meshwork as mw, orders, store
 
 _HTML_ENDPOINTS = {"login", "logout", "gallery", "tool", "admin_home", "admin_new_product",
-                    "admin_product_detail", "customer_order"}
+                    "admin_product_detail", "admin_orders", "customer_order"}
 
 logging.basicConfig(level=logging.INFO,
                      format="%(asctime)s %(levelname)s %(name)s | %(message)s")
@@ -158,6 +158,12 @@ def admin_delete_product(product_id):
     return redirect(url_for("admin_home"))
 
 
+@app.route("/admin/orders")
+@login_required
+def admin_orders():
+    return render_template("admin_orders.html", orders=db.list_all_orders())
+
+
 @app.route("/admin/orders/<code>/download")
 @login_required
 def admin_download_order(code):
@@ -166,6 +172,16 @@ def admin_download_order(code):
         abort(404, "commande introuvable")
     return send_file(order["output_path"], mimetype="model/3mf",
                       as_attachment=True, download_name=f"commande_{code}.3mf")
+
+
+@app.route("/admin/orders/<code>/done", methods=["POST"])
+@login_required
+def admin_complete_order(code):
+    if db.get_order(code) is None:
+        abort(404, "commande introuvable")
+    db.mark_order_done(code)
+    nxt = request.form.get("next")
+    return redirect(nxt if nxt and nxt.startswith("/") else url_for("admin_orders"))
 
 
 # --- customer page ---------------------------------------------------------------

@@ -47,13 +47,20 @@
         <p class="hint">Aucune commande pour l'instant.</p>
       {% else %}
         <table class="admin-table">
-          <thead><tr><th>Numéro</th><th>Reçue le</th><th></th></tr></thead>
+          <thead><tr><th>Numéro</th><th>Reçue le</th><th></th><th></th></tr></thead>
           <tbody>
             {% for o in orders %}
             <tr>
               <td><code>{{ o['code'] }}</code></td>
               <td class="muted">{{ o['created_at'][:16].replace('T', ' ') }}</td>
               <td><a class="btn-link small" href="{{ url_for('admin_download_order', code=o['code']) }}">⬇ Télécharger le 3MF</a></td>
+              <td>
+                <form method="post" action="{{ url_for('admin_complete_order', code=o['code']) }}"
+                      onsubmit="return confirm('Marquer cette commande comme terminée ? Elle disparaîtra de cette liste.');">
+                  <input type="hidden" name="next" value="{{ url_for('admin_product_detail', product_id=product['id']) }}">
+                  <button type="submit" class="btn-link small done-btn">✓ Terminée</button>
+                </form>
+              </td>
             </tr>
             {% endfor %}
           </tbody>

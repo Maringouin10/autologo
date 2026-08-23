@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoLogo — Commandes</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="admin-body">
+  <header class="topbar">
+    <h1>🏷️ Commandes</h1>
+    <a class="muted" href="{{ url_for('admin_home') }}">← Produits</a>
+    <a class="logout" href="{{ url_for('logout') }}">Déconnexion</a>
+  </header>
+
+  <main class="admin-main">
+    <section class="admin-card">
+      <h2>À traiter ({{ orders|length }})</h2>
+      {% if not orders %}
+        <p class="hint">Aucune commande en attente.</p>
+      {% else %}
+        <table class="admin-table">
+          <thead><tr><th>Numéro</th><th>Produit</th><th>Reçue le</th><th></th><th></th></tr></thead>
+          <tbody>
+            {% for o in orders %}
+            <tr>
+              <td><code>{{ o['code'] }}</code></td>
+              <td>{{ o['product_name'] }}</td>
+              <td class="muted">{{ o['created_at'][:16].replace('T', ' ') }}</td>
+              <td><a class="btn-link small" href="{{ url_for('admin_download_order', code=o['code']) }}">⬇ Télécharger</a></td>
+              <td>
+                <form method="post" action="{{ url_for('admin_complete_order', code=o['code']) }}"
+                      onsubmit="return confirm('Marquer cette commande comme terminée ? Elle disparaîtra de cette liste.');">
+                  <input type="hidden" name="next" value="{{ url_for('admin_orders') }}">
+                  <button type="submit" class="btn-link small done-btn">✓ Terminée</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>

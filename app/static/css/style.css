@@ -134,7 +134,7 @@ body {
 /* --- admin pages --- */
 .admin-body { height: auto; overflow: auto; }
 .admin-main { max-width: 900px; margin: 0 auto; padding: 24px 20px 60px; display: flex; flex-direction: column; gap: 20px; }
-.admin-toolbar { display: flex; justify-content: flex-end; }
+.admin-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .admin-card {
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px;
 }
@@ -149,12 +149,19 @@ body {
 .admin-table a:hover { text-decoration: underline; }
 .admin-table code { background: #0d0f14; padding: 2px 6px; border-radius: 4px; }
 
+/* .admin-table a's color rule (class+tag) outranks .btn-link's (single
+   class) — without this, a .btn-link inside a table cell got blue text
+   on its own blue background instead of white, unreadable. */
+.admin-table a.btn-link { color: #fff; }
+
 .btn-link {
   display: inline-block; padding: 9px 16px; border-radius: 8px; background: var(--accent);
   color: #fff; text-decoration: none; font-weight: 600; font-size: 0.9em;
 }
 .btn-link:hover { background: var(--accent-dim); }
 .btn-link.small { padding: 4px 10px; font-size: 0.85em; }
+.done-btn { background: #2fa860; border: none; cursor: pointer; font: inherit; }
+.done-btn:hover { background: #26894e; }
 .danger-link {
   background: none; border: 1px solid var(--danger); color: var(--danger);
   padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 0.85em;
