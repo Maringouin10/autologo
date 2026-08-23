@@ -186,20 +186,28 @@ def apply_part_colors(mesh: trimesh.Trimesh, parts: list[dict],
     """Paint an assembly's combined mesh with each part's extracted 3MF
     color (falling back to a neutral gray for parts with none), so the
     viewer shows something closer to the real product instead of one flat
-    tone. Returns False (mesh untouched) when there's nothing to paint."""
+    tone. Returns False (mesh untouched) when there's nothing to paint.
+
+    Sets VERTEX colors, never face colors: trimesh converts face colors to
+    vertex colors lazily (on .copy(), on export), and that conversion goes
+    through scipy.sparse — a dependency this image deliberately doesn't
+    carry. Parts never share vertices here (load_assembly stacks each
+    part's vertices separately), so painting per-vertex is exact, not an
+    averaged approximation."""
     if not colors:
         return False
-    face_colors = np.tile(np.array([*DEFAULT_PART_COLOR, 255], dtype=np.uint8), (len(mesh.faces), 1))
+    vertex_colors = np.tile(np.array([*DEFAULT_PART_COLOR, 255], dtype=np.uint8),
+                             (len(mesh.vertices), 1))
     painted = False
     for part in parts:
         c = colors.get(part["name"])
         if c is None:
             continue
         fs, fc = part["face_start"], part["face_count"]
-        face_colors[fs:fs + fc] = [*c, 255]
+        vertex_colors[np.unique(mesh.faces[fs:fs + fc])] = [*c, 255]
         painted = True
     if painted:
-        mesh.visual.face_colors = face_colors
+        mesh.visual.vertex_colors = vertex_colors
     return painted
 
 
@@ -781,10 +789,15 @@ def preview_logo(shapes: list, face: FaceInfo, params: PlacementParams,
     for color, group in _by_color(shapes).items():
         m = _extrude_shapes(group, matrix, thickness)
         meshes.append(m)
+        # Per-VERTEX, not per-face: trimesh converts face colors to vertex
+        # colors lazily (on .copy(), which _to_world does, and on export)
+        # and that conversion needs scipy.sparse, which this image doesn't
+        # carry. Each color group is its own mesh with its own vertices, so
+        # coloring every vertex of the group is exact.
         colors.append(np.tile(np.array([*_hex_to_rgb(color), 255], dtype=np.uint8),
-                               (len(m.faces), 1)))
+                               (len(m.vertices), 1)))
     local = trimesh.util.concatenate(meshes) if len(meshes) > 1 else meshes[0]
-    local.visual.face_colors = np.vstack(colors)
+    local.visual.vertex_colors = np.vstack(colors)
     return _to_world(local, face, z_shift=0.05)
 
 

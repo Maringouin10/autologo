@@ -72,8 +72,11 @@ class Session:
                 if self.is_assembly:
                     mw.apply_part_colors(self._mesh, self.parts, self.part_colors)
                 elif self.part_colors:
+                    # Vertex, not face, colors — see apply_part_colors: the
+                    # lazy face->vertex conversion needs scipy, which this
+                    # image doesn't carry.
                     color = next(iter(self.part_colors.values()))
-                    self._mesh.visual.face_colors = [*color, 255]
+                    self._mesh.visual.vertex_colors = [*color, 255]
         return self._mesh
 
     def face_adjacency(self):
