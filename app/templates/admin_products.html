@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoLogo — Admin</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="admin-body">
+  <header class="topbar">
+    <h1>🏷️ AutoLogo — Admin</h1>
+    <span class="muted">Produits personnalisables</span>
+    <a class="logout" href="{{ url_for('logout') }}">Déconnexion</a>
+  </header>
+
+  <main class="admin-main">
+    <div class="admin-toolbar">
+      <a class="btn-link" href="{{ url_for('admin_new_product') }}">+ Nouveau produit</a>
+    </div>
+
+    {% if not products %}
+      <p class="hint">Aucun produit pour l'instant.</p>
+    {% else %}
+      <table class="admin-table">
+        <thead>
+          <tr><th>Nom</th><th>Créé le</th><th>Export</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for p in products %}
+          <tr>
+            <td><a href="{{ url_for('admin_product_detail', product_id=p['id']) }}">{{ p['name'] }}</a></td>
+            <td class="muted">{{ p['created_at'][:16].replace('T', ' ') }}</td>
+            <td class="muted">{{ 'Assemblage complet' if p['export_mode'] == 'assembly' else 'Pièce seule' }}</td>
+            <td><a class="btn-link small" href="{{ url_for('admin_product_detail', product_id=p['id']) }}">Voir →</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </main>
+</body>
+</html>

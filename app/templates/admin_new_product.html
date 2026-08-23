@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoLogo — Nouveau produit</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>🏷️ Nouveau produit</h1>
+    <a class="muted" href="{{ url_for('admin_home') }}">← Annuler</a>
+  </header>
+
+  <main class="layout">
+    <aside class="panel">
+      <section class="step" id="step-model">
+        <h2>1. Assemblage 3D</h2>
+        <p class="hint">Un fichier 3MF contenant les différentes pièces (celle(s) à personnaliser et le reste).</p>
+        <label class="dropzone" id="model-drop">
+          <input type="file" id="model-input" accept=".stl,.obj,.ply,.3mf,.off" hidden>
+          <span id="model-drop-label">3MF (recommandé) / STL / OBJ / PLY — cliquez ou déposez</span>
+        </label>
+        <p class="hint" id="model-info"></p>
+      </section>
+
+      <section class="step" id="step-zone" disabled>
+        <h2>2. Ajouter une zone</h2>
+        <p class="hint">Cliquez sur une face <b>plate</b> de la pièce à personnaliser, dans la vue 3D.</p>
+        <p class="hint" id="face-info">Aucune face sélectionnée.</p>
+        <div id="zone-form" class="hidden">
+          <div class="field">
+            <label>Nom de la zone</label>
+            <input type="text" id="zone-label" placeholder="Zone 1">
+          </div>
+          <div class="mode-choice">
+            <label><input type="radio" name="zone-mode" value="emboss" checked> Relief (logo en saillie)</label>
+            <label><input type="radio" name="zone-mode" value="deboss"> Gravé (logo creusé + pièce de remplissage)</label>
+          </div>
+          <div class="field">
+            <label>Profondeur (mm) <span id="zone-depth-val"></span></label>
+            <input type="range" id="zone-depth" min="0.2" max="10" step="0.1" value="1.5">
+          </div>
+          <div class="field" id="zone-field-sink">
+            <label>Ancrage dans le modèle (mm) <span id="zone-sink-val"></span></label>
+            <input type="range" id="zone-sink" min="0" max="3" step="0.05" value="0.3">
+          </div>
+          <div class="field hidden" id="zone-field-fill">
+            <label>Saillie de la pièce de remplissage (mm) <span id="zone-fill-val"></span></label>
+            <input type="range" id="zone-fill" min="0" max="2" step="0.05" value="0">
+          </div>
+          <button type="button" id="add-zone-btn">+ Ajouter cette zone</button>
+        </div>
+      </section>
+
+      <section class="step" id="step-zones-list" disabled>
+        <h2>3. Zones configurées</h2>
+        <div id="zones-list" class="zones-list"></div>
+      </section>
+
+      <section class="step" id="step-publish" disabled>
+        <h2>4. Publier</h2>
+        <div class="field">
+          <label>Nom du produit</label>
+          <input type="text" id="product-name" placeholder="Mug personnalisé">
+        </div>
+        <div class="field">
+          <label>Export pour le client</label>
+          <select id="export-mode">
+            <option value="assembly">Assemblage complet (toutes les pièces)</option>
+            <option value="part">Pièce(s) personnalisée(s) seulement</option>
+          </select>
+        </div>
+        <button type="button" id="publish-btn">Publier le produit</button>
+        <p class="hint error" id="publish-error"></p>
+        <div id="publish-result" class="hidden">
+          <p class="hint">✓ Produit publié.</p>
+          <div class="copy-row">
+            <input type="text" readonly id="result-url">
+            <button type="button" id="result-copy-btn">Copier</button>
+          </div>
+          <a class="btn-link" id="result-admin-link" href="#">Voir la fiche produit →</a>
+        </div>
+      </section>
+    </aside>
+
+    <div class="viewer-wrap">
+      <div id="viewer"></div>
+      <div id="viewer-hint" class="viewer-hint">Importez l'assemblage 3D pour commencer.</div>
+    </div>
+  </main>
+
+  <script type="module" src="{{ url_for('static', filename='js/admin_new_product.js') }}"></script>
+</body>
+</html>

@@ -53,6 +53,73 @@ def welded_copy(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     return w
 
 
+def face_adjacency_of(mesh: trimesh.Trimesh) -> np.ndarray:
+    """Single-part shortcut for find_flat_region's adjacency argument."""
+    return welded_copy(mesh).face_adjacency
+
+
+def load_assembly(path: str, ext: str) -> tuple[trimesh.Trimesh, list[dict], dict]:
+    """Load a multi-object 3MF/OBJ "kit" as ONE concatenated mesh (face
+    order preserved) plus a manifest of each original part's name and
+    face-index range within it, and the original per-part meshes.
+
+    Concatenating lets the interactive viewer/raycaster treat a whole
+    assembly exactly like the single-part case (one GLB, one faceIndex
+    space) — find_flat_region needs no changes, just a face_adjacency
+    array that never bridges two different parts even where their
+    surfaces touch (see part_isolated_adjacency). The per-part meshes are
+    kept separately for the final export, where each part becomes its own
+    3MF object again."""
+    try:
+        loaded = trimesh.load(path, file_type=ext.lstrip("."), process=False)
+    except Exception as exc:
+        raise MeshError(f"impossible de lire l'assemblage 3D ({exc})") from exc
+
+    if isinstance(loaded, trimesh.Trimesh):
+        geoms = {"piece": loaded}
+    elif isinstance(loaded, trimesh.Scene):
+        geoms = {name: g for name, g in loaded.geometry.items()
+                 if isinstance(g, trimesh.Trimesh) and len(g.faces) > 0}
+    else:
+        geoms = {}
+    if not geoms:
+        raise MeshError("l'assemblage ne contient aucune pièce triangulée exploitable")
+
+    parts, all_v, all_f = [], [], []
+    vertex_offset = face_offset = 0
+    for name, g in geoms.items():
+        all_v.append(g.vertices)
+        all_f.append(g.faces + vertex_offset)
+        parts.append({"name": name, "face_start": face_offset, "face_count": len(g.faces)})
+        vertex_offset += len(g.vertices)
+        face_offset += len(g.faces)
+
+    combined = trimesh.Trimesh(vertices=np.vstack(all_v), faces=np.vstack(all_f), process=False)
+    return combined, parts, geoms
+
+
+def part_isolated_adjacency(combined: trimesh.Trimesh, parts: list[dict]) -> np.ndarray:
+    """face_adjacency for an assembly's combined mesh, welded per part —
+    two parts that happen to touch (a seam, a snug-fit joint) must never
+    flood-fill into each other."""
+    pieces = []
+    for part in parts:
+        fs, fc = part["face_start"], part["face_count"]
+        sub = trimesh.Trimesh(vertices=combined.vertices, faces=combined.faces[fs:fs + fc],
+                               process=False)
+        sub.merge_vertices()
+        if len(sub.face_adjacency):
+            pieces.append(sub.face_adjacency + fs)
+    return np.vstack(pieces) if pieces else np.empty((0, 2), dtype=np.int64)
+
+
+def part_for_face(parts: list[dict], face_index: int) -> dict:
+    for part in parts:
+        if part["face_start"] <= face_index < part["face_start"] + part["face_count"]:
+            return part
+    raise MeshError("index de face hors de toute pièce connue")
+
+
 def to_glb(mesh: trimesh.Trimesh) -> bytes:
     return mesh.export(file_type="glb")
 
@@ -203,6 +270,21 @@ class FaceInfo:
             "face_count": self.face_count,
         }
 
+    @classmethod
+    def from_json(cls, data: dict) -> "FaceInfo":
+        """Rebuild a FaceInfo a vendor resolved once when setting up a
+        product zone — no need to re-run find_flat_region (or even have
+        the mesh loaded) just to place a customer's logo on it."""
+        return cls(
+            origin=np.array(data["origin"], dtype=np.float64),
+            normal=np.array(data["normal"], dtype=np.float64),
+            u=np.array(data["u"], dtype=np.float64),
+            v=np.array(data["v"], dtype=np.float64),
+            width=float(data["width"]),
+            height=float(data["height"]),
+            face_count=int(data.get("face_count", 0)),
+        )
+
 
 def _plane_basis(normal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     ref = np.array([1.0, 0.0, 0.0]) if abs(normal[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
@@ -212,7 +294,12 @@ def _plane_basis(normal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return u, v
 
 
-def find_flat_region(mesh: trimesh.Trimesh, welded: trimesh.Trimesh, face_index: int) -> FaceInfo:
+def find_flat_region(mesh: trimesh.Trimesh, face_adjacency: np.ndarray, face_index: int) -> FaceInfo:
+    """`face_adjacency` is topology only (which faces share an edge) — the
+    geometry measured is always the original, unwelded `mesh`. Pass
+    `face_adjacency_of(mesh)` for a single part, or
+    `part_isolated_adjacency(mesh, parts)` for an assembly (so the flood
+    fill below can never cross from one part into another)."""
     if face_index < 0 or face_index >= len(mesh.faces):
         raise MeshError("index de face invalide")
 
@@ -224,9 +311,7 @@ def find_flat_region(mesh: trimesh.Trimesh, welded: trimesh.Trimesh, face_index:
     plane_tol = max(scale * PLANE_TOL_FRAC, 1e-4)
     normal_cos_min = math.cos(math.radians(NORMAL_TOL_DEG))
 
-    # Adjacency graph over the welded copy (topology only — the geometry we
-    # measure always comes from the original, unwelded `mesh`).
-    adj = welded.face_adjacency
+    adj = face_adjacency
     neighbors: dict[int, list[int]] = {}
     for a, b in adj:
         neighbors.setdefault(int(a), []).append(int(b))

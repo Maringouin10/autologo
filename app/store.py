@@ -28,10 +28,16 @@ class Session:
     created_at: float = field(default_factory=time.time)
     model_ext: str | None = None
     logo_name: str | None = None
+    # set True *before* the first mesh() call to load the model as a
+    # multi-part assembly (vendor's product-zone builder) instead of a
+    # single mesh (the plain single-piece tool)
+    is_assembly: bool = False
     # in-memory caches, lazily populated
     _mesh: object | None = field(default=None, repr=False)
-    _welded: object | None = field(default=None, repr=False)
+    _face_adjacency: object | None = field(default=None, repr=False)
     _logo_polygons: list | None = field(default=None, repr=False)
+    parts: list | None = field(default=None, repr=False)   # assembly only
+    geoms: dict | None = field(default=None, repr=False)   # assembly only, name -> Trimesh
     # logo edits (SVG "edit" step): which top-level shapes to skip, and
     # whether to mirror the (remaining) logo before it's placed
     excluded_shapes: set = field(default_factory=set)
@@ -55,13 +61,21 @@ class Session:
 
     def mesh(self):
         if self._mesh is None:
-            self._mesh = mw.load_model(str(self.model_path), self.model_ext)
+            if self.is_assembly:
+                self._mesh, self.parts, self.geoms = mw.load_assembly(
+                    str(self.model_path), self.model_ext)
+            else:
+                self._mesh = mw.load_model(str(self.model_path), self.model_ext)
         return self._mesh
 
-    def welded(self):
-        if self._welded is None:
-            self._welded = mw.welded_copy(self.mesh())
-        return self._welded
+    def face_adjacency(self):
+        if self._face_adjacency is None:
+            self.mesh()  # populates self.parts for assemblies
+            if self.is_assembly:
+                self._face_adjacency = mw.part_isolated_adjacency(self._mesh, self.parts)
+            else:
+                self._face_adjacency = mw.face_adjacency_of(self._mesh)
+        return self._face_adjacency
 
     def logo_polygons(self) -> list:
         """Every top-level shape parsed from the SVG, unedited — the stable

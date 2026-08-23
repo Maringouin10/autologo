@@ -1,13 +1,22 @@
 # 🏷️ AutoLogo
 
-Self-hosted, password-protected web app to stamp a logo onto a 3D-printable
-model: upload a **3D model** (STL/OBJ/PLY/3MF) and an **SVG logo**, click a
-**flat face** in the 3D viewer, position the logo on it, and export a
+Self-hosted web app to stamp a logo onto a 3D-printable model and export a
 **multi-object 3MF** — the base and the logo are kept as **separate objects**
 so a slicer (PrusaSlicer, Bambu Studio, OrcaSlicer…) can assign each its own
 filament/color for multi-material printing.
 
-Runs entirely in one Docker container; nothing is uploaded anywhere else.
+Runs entirely in one Docker container; nothing is uploaded anywhere else. It
+does two things:
+
+- **The plain tool** (`/`, password-protected): upload any single-part 3D
+  model + an SVG logo, position it, export. Good for one-off jobs.
+- **The vendor platform** (`/admin` → `/o/<product>`): you (the vendor) upload
+  a multi-part assembly once, mark exactly which piece(s)/face(s) a customer
+  is allowed to put a logo on and with what print settings, and publish it.
+  Customers open the public link — no account, no password — place their
+  logo on the spot(s) you approved, and submit; you get back a 3MF (the
+  customized piece, or the whole assembly) plus a unique order code to match
+  against wherever you actually take the order/payment.
 
 ## Quick start
 
@@ -17,9 +26,32 @@ cp .env.example .env   # set DASHBOARD_PASSWORD / SECRET_KEY (or leave blank for
 docker compose up -d --build
 ```
 
-Open **http://localhost:8010**.
+Open **http://localhost:8010** for the plain tool, or **/admin** for the
+vendor platform.
 
-## How it works
+## The vendor platform
+
+1. **`/admin` → + Nouveau produit.** Upload a multi-part **3MF** assembly
+   (STL/OBJ work too but won't have separate parts). The whole assembly loads
+   in one viewer — the part under your click is resolved automatically, so
+   clicking behaves exactly like the plain tool even though it's several
+   parts glued together.
+2. **Click a flat face** on the piece you want customizable, name the zone,
+   set **mode** (relief/gravé) and **depth/anchor** — these are locked for
+   customers, exactly so you keep control of print cost/waste (a purge tower
+   for multi-material is not free). Repeat for more zones/pieces if you want
+   more than one customizable spot; most products just need one.
+3. **Publish**, choosing whether customers' downloads (and yours) contain
+   the **whole assembly** or **just the customized piece(s)**. You get a
+   public link (`/o/<product_id>`) to send customers, and a product page
+   listing every order received with a 3MF download for each.
+4. **Customer side** (`/o/<product_id>`, no login): upload an SVG, exclude
+   shapes/mirror it if needed, drag/resize/fit it into the approved zone(s),
+   hit **Envoyer ma commande** — they get a short order code back. Nothing
+   else happens automatically yet (no payment, no email) — wire that code
+   into whatever order form/checkout you already use.
+
+## How the plain tool works
 
 1. **Upload the 3D model.** It's parsed with `trimesh` and converted to glTF
    for the in-browser viewer (Three.js), face-for-face identical to the
@@ -56,8 +88,12 @@ filament/color to each.
 
 ## Notes
 
-- Sessions (uploaded files + cache) live under the `./data` volume, one
-  directory per session, cleaned up automatically after `SESSION_TTL_HOURS`.
+- Sessions (uploaded files + cache, for the plain tool **and** for a
+  customer mid-order) live under the `./data` volume, one directory per
+  session, cleaned up automatically after `SESSION_TTL_HOURS`. **Products
+  and submitted orders are not sessions** — they're kept indefinitely
+  (`./data/autologo.db`, `./data/products/`, `./data/orders/`) until you
+  delete a product from its admin page.
 - The live preview never runs a boolean operation (it just shows where the
   logo will sit) — only **Export** in *gravé* mode runs the actual cut, so
   slider dragging stays fast even on a large model.

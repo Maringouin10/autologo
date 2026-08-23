@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoLogo — {{ product['name'] }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="admin-body">
+  <header class="topbar">
+    <h1>🏷️ {{ product['name'] }}</h1>
+    <a class="muted" href="{{ url_for('admin_home') }}">← Tous les produits</a>
+    <a class="logout" href="{{ url_for('logout') }}">Déconnexion</a>
+  </header>
+
+  <main class="admin-main">
+    <section class="admin-card">
+      <h2>Lien client</h2>
+      <div class="copy-row">
+        <input type="text" readonly value="{{ customer_url }}" id="customer-url">
+        <button type="button" id="copy-btn">Copier</button>
+      </div>
+      <p class="hint">Envoyez ce lien à vos clients — aucune connexion requise.</p>
+    </section>
+
+    <section class="admin-card">
+      <h2>Zones personnalisables ({{ zones|length }})</h2>
+      <table class="admin-table">
+        <thead><tr><th>Zone</th><th>Pièce</th><th>Mode</th><th>Profondeur</th></tr></thead>
+        <tbody>
+          {% for z in zones %}
+          <tr>
+            <td>{{ z['label'] }}</td>
+            <td class="muted">{{ z['part_name'] }}</td>
+            <td class="muted">{{ 'Relief' if z['mode'] == 'emboss' else 'Gravé' }}</td>
+            <td class="muted">{{ z['depth_mm'] }} mm</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="hint">Export: {{ 'assemblage complet' if product['export_mode'] == 'assembly' else 'pièce personnalisée seule' }}</p>
+    </section>
+
+    <section class="admin-card">
+      <h2>Commandes ({{ orders|length }})</h2>
+      {% if not orders %}
+        <p class="hint">Aucune commande pour l'instant.</p>
+      {% else %}
+        <table class="admin-table">
+          <thead><tr><th>Numéro</th><th>Reçue le</th><th></th></tr></thead>
+          <tbody>
+            {% for o in orders %}
+            <tr>
+              <td><code>{{ o['code'] }}</code></td>
+              <td class="muted">{{ o['created_at'][:16].replace('T', ' ') }}</td>
+              <td><a class="btn-link small" href="{{ url_for('admin_download_order', code=o['code']) }}">⬇ Télécharger le 3MF</a></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+    </section>
+
+    <form method="post" action="{{ url_for('admin_delete_product', product_id=product['id']) }}"
+          onsubmit="return confirm('Supprimer ce produit et toutes ses zones ? Les commandes déjà reçues restent téléchargeables ailleurs si vous en avez gardé une copie.');">
+      <button type="submit" class="danger-link">Supprimer ce produit</button>
+    </form>
+  </main>
+
+  <script>
+    document.getElementById("copy-btn").addEventListener("click", () => {
+      const input = document.getElementById("customer-url");
+      input.select();
+      navigator.clipboard?.writeText(input.value);
+    });
+  </script>
+</body>
+</html>

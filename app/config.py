@@ -18,6 +18,9 @@ def _float(name: str, default: float) -> float:
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 SESSIONS_DIR = DATA_DIR / "sessions"
+PRODUCTS_DIR = DATA_DIR / "products"
+ORDERS_DIR = DATA_DIR / "orders"
+DB_PATH = Path(os.environ.get("DB_PATH", str(DATA_DIR / "autologo.db")))
 
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
 SECRET_KEY = os.environ.get("SECRET_KEY", "")

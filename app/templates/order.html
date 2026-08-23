@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ product['name'] }} — personnalisation</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body data-product-id="{{ product['id'] }}">
+  <header class="topbar">
+    <h1>🏷️ {{ product['name'] }}</h1>
+    <span class="muted">Placez votre logo, puis envoyez votre commande</span>
+  </header>
+
+  <main class="layout">
+    <aside class="panel" id="zones-container">
+      <p class="hint">Chargement…</p>
+    </aside>
+
+    <div class="viewer-wrap">
+      <div id="viewer"></div>
+      <div id="viewer-hint" class="viewer-hint">Chargement du modèle…</div>
+    </div>
+  </main>
+
+  <div id="submit-bar" class="submit-bar hidden">
+    <p class="hint error" id="submit-error"></p>
+    <button type="button" id="submit-btn">Envoyer ma commande</button>
+  </div>
+
+  <div id="result-overlay" class="result-overlay hidden">
+    <div class="result-card">
+      <h2>Commande envoyée ✓</h2>
+      <p>Votre numéro de commande :</p>
+      <div class="order-code" id="order-code"></div>
+      <p class="hint">Reportez ce numéro dans le formulaire de commande pour finaliser votre achat.</p>
+    </div>
+  </div>
+
+  <script type="module" src="{{ url_for('static', filename='js/order.js') }}"></script>
+</body>
+</html>
