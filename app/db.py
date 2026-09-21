@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS zones (
     depth_mm      REAL NOT NULL,
     sink_mm       REAL NOT NULL DEFAULT 0.3,
     fill_extra_mm REAL NOT NULL DEFAULT 0.0,
-    sort_order    INTEGER NOT NULL DEFAULT 0
+    sort_order    INTEGER NOT NULL DEFAULT 0,
+    group_key     TEXT NOT NULL DEFAULT ''   -- zones sharing one non-empty key are identical faces
 );
 CREATE INDEX IF NOT EXISTS idx_zones_product ON zones(product_id);
 
@@ -42,7 +43,8 @@ CREATE TABLE IF NOT EXISTS orders (
     product_id   TEXT NOT NULL REFERENCES products(id),
     created_at   TEXT NOT NULL,
     output_path  TEXT,
-    status       TEXT NOT NULL DEFAULT 'new'   -- new | done
+    status       TEXT NOT NULL DEFAULT 'new',  -- new | done
+    colors_json  TEXT NOT NULL DEFAULT '{}'    -- filament colors the customer picked
 );
 CREATE INDEX IF NOT EXISTS idx_orders_product ON orders(product_id);
 """
@@ -57,8 +59,14 @@ _MIGRATIONS = {
         "bounds_json": "TEXT NOT NULL DEFAULT '{}'",
         "colors_json": "TEXT NOT NULL DEFAULT '{}'",
     },
-    "orders": {"status": "TEXT NOT NULL DEFAULT 'new'"},
-    "zones": {"face_index": "INTEGER NOT NULL DEFAULT -1"},
+    "orders": {
+        "status": "TEXT NOT NULL DEFAULT 'new'",
+        "colors_json": "TEXT NOT NULL DEFAULT '{}'",
+    },
+    "zones": {
+        "face_index": "INTEGER NOT NULL DEFAULT -1",
+        "group_key": "TEXT NOT NULL DEFAULT ''",
+    },
 }
 
 
@@ -129,9 +137,11 @@ def replace_zones(product_id: str, zones: list[dict]) -> None:
         for i, z in enumerate(zones):
             conn.execute(
                 "INSERT INTO zones (product_id, part_name, label, face_index, face_json, mode, "
-                "depth_mm, sink_mm, fill_extra_mm, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "depth_mm, sink_mm, fill_extra_mm, sort_order, group_key) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (product_id, z["part_name"], z["label"], z["face_index"], z["face_json"],
-                 z["mode"], z["depth_mm"], z["sink_mm"], z["fill_extra_mm"], i),
+                 z["mode"], z["depth_mm"], z["sink_mm"], z["fill_extra_mm"], i,
+                 z.get("group_key", "")),
             )
 
 
@@ -145,13 +155,14 @@ def delete_product(product_id: str) -> None:
 # --- zones -----------------------------------------------------------------
 def add_zone(product_id: str, part_name: str, label: str, face_json: str, mode: str,
              depth_mm: float, sink_mm: float, fill_extra_mm: float, sort_order: int,
-             face_index: int = -1) -> int:
+             face_index: int = -1, group_key: str = "") -> int:
     with get_conn() as conn:
         cur = conn.execute(
             "INSERT INTO zones (product_id, part_name, label, face_index, face_json, mode, "
-            "depth_mm, sink_mm, fill_extra_mm, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "depth_mm, sink_mm, fill_extra_mm, sort_order, group_key) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (product_id, part_name, label, face_index, face_json, mode, depth_mm, sink_mm,
-             fill_extra_mm, sort_order),
+             fill_extra_mm, sort_order, group_key),
         )
         return cur.lastrowid
 
@@ -195,11 +206,13 @@ def count_pending_orders_by_product() -> dict[str, int]:
 
 
 # --- orders ------------------------------------------------------------------
-def create_order(code: str, product_id: str, output_path: str) -> int:
+def create_order(code: str, product_id: str, output_path: str,
+                  colors_json: str = "{}") -> int:
     with get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO orders (code, product_id, created_at, output_path) VALUES (?, ?, ?, ?)",
-            (code, product_id, _now(), output_path),
+            "INSERT INTO orders (code, product_id, created_at, output_path, colors_json) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (code, product_id, _now(), output_path, colors_json),
         )
         return cur.lastrowid
 

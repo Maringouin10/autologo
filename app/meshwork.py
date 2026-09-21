@@ -134,6 +134,7 @@ def to_glb(mesh: trimesh.Trimesh) -> bytes:
 _3MF_CORE_NS = "{http://schemas.microsoft.com/3dmanufacturing/core/2015/02}"
 _3MF_MATERIAL_NS = "{http://schemas.microsoft.com/3dmanufacturing/material/2015/02}"
 DEFAULT_PART_COLOR = (143, 166, 201)  # matches the viewer's flat default (0x8fa6c9)
+DEFAULT_MODEL_HEX = "#8fa6c9"
 
 
 def extract_3mf_colors(path: str) -> dict[str, tuple[int, int, int]]:
@@ -442,6 +443,38 @@ def _is_usable_polygon(p) -> bool:
         return bool(p.is_valid) and p.area > 1e-6
     except Exception:
         return False
+
+
+def nearest_color(color: str, choices: list[str]) -> str:
+    """The perceptually-close-enough member of `choices` for `color` —
+    plain RGB distance, used to pre-select a filament for each color an
+    uploaded SVG happens to use."""
+    if not choices:
+        return color
+    try:
+        target = _hex_to_rgb(color)
+    except (ValueError, IndexError):
+        return choices[0]
+
+    def distance(candidate: str) -> float:
+        try:
+            r, g, b = _hex_to_rgb(candidate)
+        except (ValueError, IndexError):
+            return float("inf")
+        return sum((a - c) ** 2 for a, c in zip((r, g, b), target))
+
+    return min(choices, key=distance)
+
+
+def recolor_shapes(shapes: list, mapping: dict[str, str]) -> list:
+    """Re-tag shapes with the filament colors the customer picked
+    (`{svg_color: chosen_color}`). Shapes whose color isn't in the mapping
+    keep the color the SVG gave them. Two source colors mapped to the same
+    filament merge into one object at export time, which is exactly right:
+    one filament, one object."""
+    if not mapping:
+        return shapes
+    return [LogoShape(s.polygon, mapping.get(s.color, s.color)) for s in shapes]
 
 
 def logo_colors(shapes: list) -> list[str]:
@@ -924,11 +957,77 @@ def deboss(base: trimesh.Trimesh, shapes: list, face: FaceInfo, params: Placemen
 
 
 # --- export ------------------------------------------------------------------
-def export_3mf(named_meshes: dict[str, trimesh.Trimesh]) -> bytes:
+def _inject_3mf_colors(data: bytes, object_colors: dict[str, str]) -> bytes:
+    """Give each named object a display color in the exported 3MF.
+
+    trimesh's 3MF writer drops color entirely (verified: the .model it
+    produces has neither <basematerials> nor <m:colorgroup>), so the
+    customer's chosen filament colors would be lost the moment the vendor
+    opened the file. Rather than reimplement the writer, add the resource
+    trimesh omits: one <basematerials> entry per object, referenced by the
+    object's own pid/pindex. That is the same structure extract_3mf_colors
+    reads back, so a file exported here re-imports with its colors intact.
+
+    Never raises: a file that can't be rewritten is returned untouched —
+    losing the color annotation is bad, losing the geometry is worse."""
+    if not object_colors:
+        return data
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            entries = {n: z.read(n) for n in z.namelist()}
+        model_name = next((n for n in entries if n.lower().endswith(".model")), None)
+        if model_name is None:
+            return data
+
+        for prefix, uri in (("", _3MF_CORE_NS), ("m", _3MF_MATERIAL_NS)):
+            ET.register_namespace(prefix, uri.strip("{}"))
+        root = ET.fromstring(entries[model_name])
+        resources = root.find(f"{_3MF_CORE_NS}resources")
+        if resources is None:
+            return data
+
+        objects = list(root.iter(f"{_3MF_CORE_NS}object"))
+        used_ids = {o.get("id") for o in objects}
+        group_id = str(max((int(i) for i in used_ids if str(i).isdigit()), default=0) + 1)
+
+        materials = ET.Element(f"{_3MF_CORE_NS}basematerials", {"id": group_id})
+        index_of: dict[str, int] = {}
+        for obj in objects:
+            color = object_colors.get(obj.get("name") or "")
+            if not color:
+                continue
+            key = color.lower()
+            if key not in index_of:
+                index_of[key] = len(index_of)
+                ET.SubElement(materials, f"{_3MF_CORE_NS}base", {
+                    "name": obj.get("name") or key,
+                    # 3MF display colors are #RRGGBBAA, not #RRGGBB.
+                    "displaycolor": f"#{key.lstrip('#').upper()}FF",
+                })
+            obj.set("pid", group_id)
+            obj.set("pindex", str(index_of[key]))
+        if not index_of:
+            return data
+        resources.insert(0, materials)
+        entries[model_name] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+            for name, payload in entries.items():
+                z.writestr(name, payload)
+        return out.getvalue()
+    except Exception:
+        return data
+
+
+def export_3mf(named_meshes: dict[str, trimesh.Trimesh],
+                object_colors: dict[str, str] | None = None) -> bytes:
+    """Pack every named mesh as its own 3MF object. `object_colors` maps an
+    object name to '#rrggbb' — the filament the customer picked for it."""
     scene = trimesh.Scene()
     for name, mesh in named_meshes.items():
         scene.add_geometry(mesh, node_name=name, geom_name=name)
     data = scene.export(file_type="3mf")
     if isinstance(data, str):
         data = data.encode("utf-8")
-    return data
+    return _inject_3mf_colors(data, object_colors or {})

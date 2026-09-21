@@ -95,6 +95,8 @@ function fitCameraTo(bounds) {
 }
 
 const gltfLoader = new GLTFLoader();
+let assemblyMesh = null;
+
 function loadAssembly(url, bounds) {
   gltfLoader.load(url, (gltf) => {
     let mesh = null;
@@ -103,12 +105,27 @@ function loadAssembly(url, bounds) {
     mesh.material = pickModelMaterial(mesh);
     scene.add(mesh);
     scene.add(new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry, 25), edgeMaterial));
+    assemblyMesh = mesh;
+    applyModelColor();
     fitCameraTo(bounds);
     hintEl.textContent = "Déposez votre logo à gauche, puis glissez-le sur l'objet.";
   }, undefined, (err) => {
     hintEl.textContent = "Échec du chargement du modèle.";
     toastError("Échec du chargement du modèle 3D : " + err.message);
   });
+}
+
+// Picking a filament for the object repaints it in the viewer: the customer
+// sees the actual combination they are ordering, not a gray placeholder.
+const chosenModelMaterial = new THREE.MeshStandardMaterial({ metalness: 0.05, roughness: 0.55 });
+function applyModelColor() {
+  if (!assemblyMesh) return;
+  if (state.modelColor) {
+    chosenModelMaterial.color.set(state.modelColor);
+    assemblyMesh.material = chosenModelMaterial;
+  } else {
+    assemblyMesh.material = pickModelMaterial(assemblyMesh);
+  }
 }
 
 // --- shape-picker helpers (svg thumbnails) --------------------------------------
@@ -118,9 +135,9 @@ function ringsToPathD(rings) {
     return `M${first[0]},${first[1]} ` + rest.map((p) => `L${p[0]},${p[1]}`).join(" ") + " Z";
   }).join(" ");
 }
-// One <path> per shape, each filled with the color parsed from the SVG,
-// so the picker and the combined preview show the logo as it will print
-// rather than a single flat silhouette.
+// One <path> per shape, filled with the color it will actually print in
+// (the chosen filament, falling back to the SVG's own fill), so the picker
+// and the flat preview match the 3D view.
 function shapeSvg(shapes) {
   if (!shapes.length) return "";
   const minx = Math.min(...shapes.map((s) => s.bbox[0]));
@@ -131,13 +148,57 @@ function shapeSvg(shapes) {
   const pad = Math.max(w, h) * 0.08;
   const vb = `${minx - pad} ${miny - pad} ${w + 2 * pad} ${h + 2 * pad}`;
   const paths = shapes.map((s) =>
-    `<path fill="${s.color || "#36d17a"}" fill-rule="evenodd" d="${ringsToPathD(s.rings)}"/>`
+    `<path fill="${printedColor(s.color)}" fill-rule="evenodd" d="${ringsToPathD(s.rings)}"/>`
   ).join("");
   return `<svg viewBox="${vb}" preserveAspectRatio="xMidYMid meet">${paths}</svg>`;
 }
 
+// --- order-wide state ----------------------------------------------------------
+const state = {
+  palette: [],
+  maxColors: 4,
+  modelColor: null,
+  defaultModelColor: null,
+  // {svg color -> chosen filament}, shared by every zone: two zones printing
+  // the same source color in different filaments would silently blow the
+  // color budget, and nobody asked for that.
+  colorMap: {},
+};
+
+function printedColor(sourceColor) {
+  return state.colorMap[sourceColor] || sourceColor;
+}
+
+/** Distinct filaments this order needs right now. */
+function usedColors() {
+  const used = [];
+  const push = (c) => { if (c && !used.includes(c)) used.push(c); };
+  push(state.modelColor);
+  for (const engine of engines) {
+    if (!engine.hasLogo) continue;
+    for (const shape of engine.shapes) {
+      if (engine.excluded.has(shape.index)) continue;
+      push(printedColor(shape.color));
+    }
+  }
+  return used;
+}
+
+/** Source colors still in use across the order, in first-seen order. */
+function sourceColors() {
+  const seen = [];
+  for (const engine of engines) {
+    if (!engine.hasLogo) continue;
+    for (const shape of engine.shapes) {
+      if (engine.excluded.has(shape.index)) continue;
+      if (!seen.includes(shape.color)) seen.push(shape.color);
+    }
+  }
+  return seen;
+}
+
 // --- drag registry: any zone's preview mesh can be grabbed ----------------------
-const dragRegistry = new Map(); // THREE.Mesh -> zone controller
+const dragRegistry = new Map(); // THREE.Mesh -> the control set that owns it
 const raycaster = new THREE.Raycaster();
 function ndcFromEvent(ev) {
   const rect = renderer.domElement.getBoundingClientRect();
@@ -147,16 +208,16 @@ function ndcFromEvent(ev) {
   );
 }
 
-let dragging = null; // the zone controller currently being dragged, or null
+let dragging = null;
 renderer.domElement.addEventListener("pointerdown", (ev) => {
   const objs = [...dragRegistry.keys()];
   if (!objs.length) return;
   raycaster.setFromCamera(ndcFromEvent(ev), camera);
   const hits = raycaster.intersectObjects(objs, false);
   if (!hits.length) return;
-  const zone = dragRegistry.get(hits[0].object);
-  if (!zone) return;
-  dragging = zone;
+  const target = dragRegistry.get(hits[0].object);
+  if (!target) return;
+  dragging = { controls: target.controls, engine: target.engine };
   controls.enabled = false;
   hintEl.textContent = "Glissez pour positionner le logo…";
   window.addEventListener("pointermove", onDragMove);
@@ -165,11 +226,12 @@ renderer.domElement.addEventListener("pointerdown", (ev) => {
 
 function onDragMove(ev) {
   if (!dragging) return;
+  const engine = dragging.engine;
   raycaster.setFromCamera(ndcFromEvent(ev), camera);
   const hit = new THREE.Vector3();
-  if (!raycaster.ray.intersectPlane(dragging.plane, hit)) return;
-  const rel = hit.sub(dragging.origin);
-  dragging.applyDragOffset(rel.dot(dragging.u), rel.dot(dragging.v));
+  if (!raycaster.ray.intersectPlane(engine.plane, hit)) return;
+  const rel = hit.sub(engine.origin);
+  dragging.controls.applyDragOffset(rel.dot(engine.u), rel.dot(engine.v));
 }
 function onDragEnd() {
   window.removeEventListener("pointermove", onDragMove);
@@ -179,18 +241,120 @@ function onDragEnd() {
   hintEl.textContent = "Glissez le logo pour l'ajuster.";
 }
 
-// --- one controller per zone -----------------------------------------------
-function makeZoneController(z) {
-  const origin = new THREE.Vector3(...z.origin);
-  const normal = new THREE.Vector3(...z.normal);
-  const u = new THREE.Vector3(...z.u);
-  const v = new THREE.Vector3(...z.v);
-  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, origin);
+// --- zone engine: one per customizable face, no DOM of its own -----------------
+// It owns the face geometry, the server-side zone state and the preview mesh.
+// A control set (below) drives one engine (a face on its own) or several at
+// once (faces the vendor grouped, printed with the same logo).
+function makeEngine(z) {
+  const engine = {
+    id: z.id,
+    label: z.label,
+    groupKey: z.group_key || "",
+    width: z.width,
+    height: z.height,
+    suggestedWidth: z.suggested_width_mm,
+    origin: new THREE.Vector3(...z.origin),
+    normal: new THREE.Vector3(...z.normal),
+    u: new THREE.Vector3(...z.u),
+    v: new THREE.Vector3(...z.v),
+    plane: new THREE.Plane().setFromNormalAndCoplanarPoint(
+      new THREE.Vector3(...z.normal), new THREE.Vector3(...z.origin)),
+    hasLogo: false,
+    file: null,           // kept so "same logo everywhere" can re-send it
+    shapes: [],
+    excluded: new Set(),
+    flipH: false,
+    flipV: false,
+    placement: { width_mm: z.suggested_width_mm, rotation_deg: 0, offset_x_mm: 0, offset_y_mm: 0 },
+    previewObject: null,
+    previewBaseOffset: { x: 0, y: 0 },
+    owner: null,          // the control set currently driving this engine
+  };
 
+  engine.upload = async (file) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(`/api/order/session/${SESSION_ID}/zone/${z.id}/logo`, {
+      method: "POST", body: fd,
+    });
+    const data = await readJson(res);
+    if (!res.ok) throw new Error(data.error || "échec de l'import");
+    engine.hasLogo = true;
+    engine.file = file;
+    engine.shapes = data.shapes;
+    engine.excluded = new Set();
+    engine.flipH = false;
+    engine.flipV = false;
+    return data;
+  };
+
+  engine.pushEdit = async () => {
+    const res = await fetch(`/api/order/session/${SESSION_ID}/zone/${z.id}/edit`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        excluded: [...engine.excluded], flip_h: engine.flipH, flip_v: engine.flipV,
+        colors: state.colorMap,
+      }),
+    });
+    const data = await readJson(res);
+    if (!res.ok) throw new Error(data.error || "échec de la mise à jour");
+    return data;
+  };
+
+  engine.fit = async () => {
+    const res = await fetch(`/api/order/session/${SESSION_ID}/zone/${z.id}/fit`, { method: "POST" });
+    const data = await readJson(res);
+    if (!res.ok) throw new Error(data.error || "échec de l'ajustement");
+    return data;
+  };
+
+  engine.refreshPreview = async () => {
+    if (!engine.hasLogo) return;
+    const placement = { ...engine.placement };
+    const res = await fetch(`/api/order/session/${SESSION_ID}/zone/${z.id}/preview`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(placement),
+    });
+    if (!res.ok) { const d = await readJson(res); throw new Error(d.error || "échec de l'aperçu"); }
+    const buf = await res.arrayBuffer();
+    await new Promise((resolve) => {
+      new GLTFLoader().parse(buf, "", (gltf) => {
+        if (engine.previewObject) {
+          scene.remove(engine.previewObject);
+          dragRegistry.delete(engine.previewObject);
+        }
+        let mesh = null;
+        gltf.scene.traverse((obj) => { if (!mesh && obj.isMesh) mesh = obj; });
+        if (mesh) {
+          mesh.material = pickPreviewMaterial(mesh);
+          scene.add(mesh);
+          engine.previewObject = mesh;
+          if (engine.owner) dragRegistry.set(mesh, { engine, controls: engine.owner });
+        }
+        // The freshly loaded mesh bakes in this exact offset, so instant
+        // drag feedback measures its delta from here, not from (0,0).
+        engine.previewBaseOffset = { x: placement.offset_x_mm, y: placement.offset_y_mm };
+        resolve();
+      }, resolve);
+    });
+  };
+
+  engine.clearPreview = () => {
+    if (!engine.previewObject) return;
+    scene.remove(engine.previewObject);
+    dragRegistry.delete(engine.previewObject);
+    engine.previewObject = null;
+  };
+
+  return engine;
+}
+
+// --- control set: the panel UI driving one or more engines ---------------------
+function makeControls(groupEngines, { title, compact = false }) {
   const el = document.createElement("div");
-  el.className = "zone-block";
+  el.className = compact ? "sub-zone" : "zone-controls";
   el.innerHTML = `
-    <h2><span class="zone-title"></span></h2>
+    ${compact ? '<h3 class="sub-zone-title"></h3>' : ""}
     <p class="zone-status">En attente de votre logo</p>
     <label class="dropzone zone-drop">
       <input type="file" accept=".svg" hidden class="zone-file-input">
@@ -216,7 +380,7 @@ function makeZoneController(z) {
       </button>
       <div class="field">
         <label>Taille <span class="zone-width-val val"></span></label>
-        <input type="range" class="zone-width" min="1" max="${Math.max(z.width, z.height) * 1.5}" step="0.5" value="${z.suggested_width_mm}">
+        <input type="range" class="zone-width" min="1" step="0.5">
       </div>
       <div class="field">
         <label>Rotation <span class="zone-rot-val val"></span></label>
@@ -224,28 +388,38 @@ function makeZoneController(z) {
       </div>
       <div class="field">
         <label>Décalage horizontal <span class="zone-dx-val val"></span></label>
-        <input type="range" class="zone-dx" min="${-z.width}" max="${z.width}" step="0.2" value="0">
+        <input type="range" class="zone-dx" step="0.2" value="0">
       </div>
       <div class="field">
         <label>Décalage vertical <span class="zone-dy-val val"></span></label>
-        <input type="range" class="zone-dy" min="${-z.height}" max="${z.height}" step="0.2" value="0">
+        <input type="range" class="zone-dy" step="0.2" value="0">
       </div>
     </div>
   `;
-  // The label is vendor-supplied text: set it as text, never as HTML.
-  el.querySelector(".zone-title").textContent = z.label;
+  if (compact) el.querySelector(".sub-zone-title").textContent = title;
 
-  const ctl = {
-    id: z.id, el, origin, normal, u, v, plane,
-    hasLogo: false, shapes: [], excluded: new Set(), flipH: false, flipV: false,
-    previewObject: null, previewBaseOffset: { x: 0, y: 0 },
-  };
-
+  const lead = groupEngines[0];
   const status = el.querySelector(".zone-status");
   const sliders = {
     width: el.querySelector(".zone-width"), rot: el.querySelector(".zone-rot"),
     dx: el.querySelector(".zone-dx"), dy: el.querySelector(".zone-dy"),
   };
+  // Grouped faces are identical by construction, so the lead face's limits
+  // apply to all of them.
+  sliders.width.max = Math.max(lead.width, lead.height) * 1.5;
+  sliders.width.value = lead.placement.width_mm;
+  sliders.rot.value = lead.placement.rotation_deg;
+  sliders.dx.min = -lead.width; sliders.dx.max = lead.width;
+  sliders.dy.min = -lead.height; sliders.dy.max = lead.height;
+  sliders.dx.value = lead.placement.offset_x_mm;
+  sliders.dy.value = lead.placement.offset_y_mm;
+
+  const ctl = { el, engines: groupEngines };
+  groupEngines.forEach((engine) => {
+    engine.owner = ctl;
+    if (engine.previewObject) dragRegistry.set(engine.previewObject, { engine, controls: ctl });
+  });
+
   function updateReadout() {
     el.querySelector(".zone-width-val").textContent = `${parseFloat(sliders.width.value).toFixed(1)} mm`;
     el.querySelector(".zone-rot-val").textContent = `${sliders.rot.value}°`;
@@ -254,51 +428,33 @@ function makeZoneController(z) {
   }
   updateReadout();
 
-  function currentParams() {
+  function currentPlacement() {
     return {
-      width_mm: parseFloat(sliders.width.value), rotation_deg: parseFloat(sliders.rot.value),
-      offset_x_mm: parseFloat(sliders.dx.value), offset_y_mm: parseFloat(sliders.dy.value),
+      width_mm: parseFloat(sliders.width.value),
+      rotation_deg: parseFloat(sliders.rot.value),
+      offset_x_mm: parseFloat(sliders.dx.value),
+      offset_y_mm: parseFloat(sliders.dy.value),
     };
-  }
-
-  function loadPreviewGlb(buf) {
-    const loader = new GLTFLoader();
-    loader.parse(buf, "", (gltf) => {
-      if (ctl.previewObject) { scene.remove(ctl.previewObject); dragRegistry.delete(ctl.previewObject); }
-      let mesh = null;
-      gltf.scene.traverse((obj) => { if (!mesh && obj.isMesh) mesh = obj; });
-      if (!mesh) return;
-      mesh.material = pickPreviewMaterial(mesh);
-      scene.add(mesh);
-      ctl.previewObject = mesh;
-      dragRegistry.set(mesh, ctl);
-    });
   }
 
   let previewTimer = null;
   function schedulePreview() {
     updateReadout();
+    const placement = currentPlacement();
+    ctl.engines.forEach((engine) => { engine.placement = { ...placement }; });
     if (previewTimer) clearTimeout(previewTimer);
-    previewTimer = setTimeout(requestPreview, 120);
+    previewTimer = setTimeout(() => refreshAll(), 120);
   }
 
-  async function requestPreview() {
-    if (!ctl.hasLogo) return;
-    const placement = currentParams();
+  async function refreshAll() {
     try {
-      const res = await fetch(`/api/order/session/${SESSION_ID}/zone/${z.id}/preview`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(placement),
-      });
-      if (!res.ok) { const d = await readJson(res); throw new Error(d.error || "échec de l'aperçu"); }
-      const buf = await res.arrayBuffer();
-      loadPreviewGlb(buf);
-      ctl.previewBaseOffset = { x: placement.offset_x_mm, y: placement.offset_y_mm };
-      updateSubmitState();
+      for (const engine of ctl.engines) await engine.refreshPreview();
     } catch (err) {
-      setGlobalError(err.message);
+      toastError(err.message);
     }
+    updateSubmitState();
   }
-  ctl.requestPreview = requestPreview;
+  ctl.refreshAll = refreshAll;
 
   ctl.applyDragOffset = (offX, offY) => {
     const dx = Math.max(Number(sliders.dx.min), Math.min(Number(sliders.dx.max), offX));
@@ -306,68 +462,76 @@ function makeZoneController(z) {
     sliders.dx.value = dx;
     sliders.dy.value = dy;
     updateReadout();
-    if (ctl.previewObject) {
-      ctl.previewObject.position
-        .copy(u).multiplyScalar(dx - ctl.previewBaseOffset.x)
-        .addScaledVector(v, dy - ctl.previewBaseOffset.y);
+    // Instant, purely client-side feedback while the authoritative mesh is
+    // re-extruded server-side.
+    for (const engine of ctl.engines) {
+      if (!engine.previewObject) continue;
+      engine.previewObject.position
+        .copy(engine.u).multiplyScalar(dx - engine.previewBaseOffset.x)
+        .addScaledVector(engine.v, dy - engine.previewBaseOffset.y);
     }
     schedulePreview();
   };
 
-  [sliders.width, sliders.rot, sliders.dx, sliders.dy].forEach((s) => s.addEventListener("input", schedulePreview));
+  Object.values(sliders).forEach((s) => s.addEventListener("input", schedulePreview));
 
   // --- logo upload ---
   const drop = el.querySelector(".zone-drop");
   const fileInput = el.querySelector(".zone-file-input");
   drop.addEventListener("click", () => fileInput.click());
-  ["dragover", "dragenter"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("drag"); }));
-  ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("drag"); }));
+  ["dragover", "dragenter"].forEach((ev) =>
+    drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("drag"); }));
+  ["dragleave", "drop"].forEach((ev) =>
+    drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("drag"); }));
+
   async function handleFile(file) {
-    setGlobalError("");
     status.textContent = "Import en cours…";
     setBusy(true, "Lecture de votre logo…");
-    const fd = new FormData();
-    fd.append("file", file);
     try {
-      const res = await fetch(`/api/order/session/${SESSION_ID}/zone/${z.id}/logo`, { method: "POST", body: fd });
-      const data = await readJson(res);
-      if (!res.ok) throw new Error(data.error || "échec de l'import");
-      markDropzoneFilled(el.querySelector(".zone-drop"), file.name,
-                          `${data.shapes.length} forme(s) — cliquez pour changer`);
-      ctl.hasLogo = true;
-      ctl.shapes = data.shapes;
-      ctl.excluded = new Set();
-      ctl.flipH = false;
-      ctl.flipV = false;
-      el.querySelector(".zone-flip-h").classList.remove("active");
-      el.querySelector(".zone-flip-v").classList.remove("active");
+      let data = null;
+      for (const engine of ctl.engines) data = await engine.upload(file);
+      markDropzoneFilled(drop, file.name, `${data.shapes.length} forme(s) — cliquez pour changer`);
+      // A new logo brings its own colors: keep the customer's picks for the
+      // colors that are still there, drop the ones that are gone.
+      pruneColorMap();
+      adoptDefaultColors();
       renderShapeList();
       renderCombinedPreview();
       el.querySelector(".zone-edit").classList.remove("hidden");
       el.querySelector(".zone-placement").classList.remove("hidden");
       status.textContent = "✓ Logo placé — ajustez-le à votre goût";
       status.classList.add("ready");
-      requestPreview();
+      await pushEditAll();
+      await refreshAll();
+      renderColorPanel();
     } catch (err) {
       status.textContent = "En attente de votre logo";
-      setGlobalError(err.message);
+      toastError(err.message);
     } finally {
       setBusy(false);
     }
   }
+  ctl.loadFile = handleFile;
   fileInput.addEventListener("change", () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
   drop.addEventListener("drop", (e) => { const f = e.dataTransfer.files[0]; if (f) handleFile(f); });
 
-  // --- shape edit / flip ---
+  // --- shape picker / mirror ---
+  function activeShapes() {
+    return lead.shapes.filter((s) => !lead.excluded.has(s.index));
+  }
   function renderShapeList() {
     const list = el.querySelector(".zone-shape-list");
     list.innerHTML = "";
-    for (const shape of ctl.shapes) {
+    for (const shape of lead.shapes) {
       const card = document.createElement("label");
-      card.className = "shape-card" + (ctl.excluded.has(shape.index) ? " excluded" : "");
-      card.innerHTML = `<input type="checkbox" ${ctl.excluded.has(shape.index) ? "" : "checked"}>` + shapeSvg([shape]);
+      card.className = "shape-card" + (lead.excluded.has(shape.index) ? " excluded" : "");
+      card.innerHTML = `<input type="checkbox" ${lead.excluded.has(shape.index) ? "" : "checked"}>` +
+        shapeSvg([shape]);
       card.querySelector("input").addEventListener("change", (e) => {
-        if (e.target.checked) ctl.excluded.delete(shape.index); else ctl.excluded.add(shape.index);
+        for (const engine of ctl.engines) {
+          if (e.target.checked) engine.excluded.delete(shape.index);
+          else engine.excluded.add(shape.index);
+        }
         card.classList.toggle("excluded", !e.target.checked);
         renderCombinedPreview();
         syncEdit();
@@ -375,52 +539,60 @@ function makeZoneController(z) {
       list.appendChild(card);
     }
   }
+  ctl.renderShapeList = renderShapeList;
+
   function renderCombinedPreview() {
-    const active = ctl.shapes.filter((s) => !ctl.excluded.has(s.index));
     const wrap = el.querySelector(".zone-combined-wrap");
+    const active = activeShapes();
     wrap.innerHTML = active.length ? shapeSvg(active) : '<p class="hint">(aucune forme incluse)</p>';
     const svg = wrap.querySelector("svg");
-    if (svg) svg.style.transform = `scale(${ctl.flipH ? -1 : 1}, ${ctl.flipV ? -1 : 1})`;
+    if (svg) svg.style.transform = `scale(${lead.flipH ? -1 : 1}, ${lead.flipV ? -1 : 1})`;
   }
+  ctl.renderCombinedPreview = renderCombinedPreview;
+
+  async function pushEditAll() {
+    let last = null;
+    for (const engine of ctl.engines) {
+      if (engine.hasLogo) last = await engine.pushEdit();
+    }
+    return last;
+  }
+  ctl.pushEditAll = pushEditAll;
+
   let editTimer = null;
   function syncEdit() {
     if (editTimer) clearTimeout(editTimer);
     editTimer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/order/session/${SESSION_ID}/zone/${z.id}/edit`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ excluded: [...ctl.excluded], flip_h: ctl.flipH, flip_v: ctl.flipV }),
-        });
-        const data = await readJson(res);
-        if (!res.ok) throw new Error(data.error || "échec de la mise à jour");
-        setGlobalError("");
-        requestPreview();
+        await pushEditAll();
+        await refreshAll();
+        renderColorPanel();
       } catch (err) {
-        setGlobalError(err.message);
+        toastError(err.message);
       }
     }, 150);
   }
+
   el.querySelector(".zone-flip-h").addEventListener("click", (e) => {
-    ctl.flipH = !ctl.flipH;
-    e.currentTarget.classList.toggle("active", ctl.flipH);
+    const on = !lead.flipH;
+    ctl.engines.forEach((engine) => { engine.flipH = on; });
+    e.currentTarget.classList.toggle("active", on);
     renderCombinedPreview();
     syncEdit();
   });
   el.querySelector(".zone-flip-v").addEventListener("click", (e) => {
-    ctl.flipV = !ctl.flipV;
-    e.currentTarget.classList.toggle("active", ctl.flipV);
+    const on = !lead.flipV;
+    ctl.engines.forEach((engine) => { engine.flipV = on; });
+    e.currentTarget.classList.toggle("active", on);
     renderCombinedPreview();
     syncEdit();
   });
 
   // --- fit to plate ---
   el.querySelector(".zone-fit-btn").addEventListener("click", async () => {
-    if (!ctl.hasLogo) return;
-    setGlobalError("");
+    if (!lead.hasLogo) return;
     try {
-      const res = await fetch(`/api/order/session/${SESSION_ID}/zone/${z.id}/fit`, { method: "POST" });
-      const data = await readJson(res);
-      if (!res.ok) throw new Error(data.error || "échec de l'ajustement");
+      const data = await lead.fit();
       if (data.width_mm > Number(sliders.width.max)) sliders.width.max = data.width_mm;
       sliders.width.value = data.width_mm;
       sliders.rot.value = data.rotation_deg;
@@ -428,34 +600,270 @@ function makeZoneController(z) {
       sliders.dy.value = 0;
       schedulePreview();
     } catch (err) {
-      setGlobalError(err.message);
+      toastError(err.message);
     }
   });
+
+  // --- restore the UI for engines that already carry a logo ---
+  if (lead.hasLogo) {
+    markDropzoneFilled(drop, lead.file ? lead.file.name : "logo.svg",
+                        `${lead.shapes.length} forme(s) — cliquez pour changer`);
+    el.querySelector(".zone-flip-h").classList.toggle("active", lead.flipH);
+    el.querySelector(".zone-flip-v").classList.toggle("active", lead.flipV);
+    renderShapeList();
+    renderCombinedPreview();
+    el.querySelector(".zone-edit").classList.remove("hidden");
+    el.querySelector(".zone-placement").classList.remove("hidden");
+    status.textContent = "✓ Logo placé — ajustez-le à votre goût";
+    status.classList.add("ready");
+  }
 
   return ctl;
 }
 
-// --- boot --------------------------------------------------------------------
-let SESSION_ID = null;
-const zoneControllers = [];
+// --- group panel: identical faces, together or apart ---------------------------
+function makeGroupPanel(groupEngines) {
+  const el = document.createElement("section");
+  el.className = "zone-block";
+  const multi = groupEngines.length > 1;
+  el.innerHTML = `
+    <h2>
+      <span class="zone-title"></span>
+      ${multi ? `<span class="badge badge-accent">${groupEngines.length} faces</span>` : ""}
+    </h2>
+    ${multi ? `
+      <p class="group-faces hint" style="margin-bottom:4px"></p>
+      <p class="hint" style="margin-bottom:8px">
+        Ces faces sont identiques : un seul logo peut les couvrir toutes, ou
+        chacune peut avoir le sien.
+      </p>
+      <div class="flip-row link-toggle">
+        <button type="button" class="toggle-btn active" data-mode="linked">Le même partout</button>
+        <button type="button" class="toggle-btn" data-mode="split">Un par face</button>
+      </div>` : ""}
+    <div class="group-body"></div>
+  `;
+  el.querySelector(".zone-title").textContent = multi
+    ? (groupEngines[0].groupKey || "Faces identiques")
+    : groupEngines[0].label;
+  if (multi) {
+    el.querySelector(".group-faces").textContent = groupEngines.map((e) => e.label).join(" · ");
+  }
 
-function setGlobalError(msg) {
-  if (msg) toastError(msg);
+  const body = el.querySelector(".group-body");
+  const panel = { el, engines: groupEngines, mode: "linked", controls: [] };
+
+  function build() {
+    panel.controls.forEach((c) => c.el.remove());
+    panel.controls = [];
+    body.innerHTML = "";
+    if (panel.mode === "linked") {
+      const ctl = makeControls(groupEngines, { title: "" });
+      panel.controls = [ctl];
+      body.appendChild(ctl.el);
+    } else {
+      panel.controls = groupEngines.map((engine) => {
+        const ctl = makeControls([engine], { title: engine.label, compact: true });
+        body.appendChild(ctl.el);
+        return ctl;
+      });
+    }
+  }
+  build();
+
+  el.querySelectorAll(".link-toggle .toggle-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const mode = btn.dataset.mode;
+      if (mode === panel.mode) return;
+      panel.mode = mode;
+      el.querySelectorAll(".link-toggle .toggle-btn")
+        .forEach((b) => b.classList.toggle("active", b === btn));
+      build();
+      // Going back to one-logo-for-all: re-send the lead face's logo and
+      // placement to the others, so what the panel shows is what is stored.
+      if (mode === "linked") {
+        const source = groupEngines.find((e) => e.hasLogo && e.file);
+        if (source) await panel.controls[0].loadFile(source.file);
+      }
+      updateSubmitState();
+    });
+  });
+
+  return panel;
 }
 
+// --- colors --------------------------------------------------------------------
+function swatchRow(selected, onPick) {
+  const row = document.createElement("div");
+  row.className = "swatches";
+  row.setAttribute("role", "radiogroup");
+  for (const color of state.palette) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "swatch" + (color.hex === selected ? " is-active" : "");
+    btn.style.background = color.hex;
+    btn.title = color.name;
+    btn.setAttribute("aria-label", color.name);
+    btn.setAttribute("role", "radio");
+    btn.setAttribute("aria-checked", color.hex === selected ? "true" : "false");
+    btn.addEventListener("click", () => onPick(color.hex));
+    row.appendChild(btn);
+  }
+  return row;
+}
+
+function colorLabel(hex) {
+  return state.palette.find((c) => c.hex === hex)?.name || hex;
+}
+
+/** Pre-select, for every color the SVG uses, the closest filament offered. */
+function adoptDefaultColors() {
+  for (const source of sourceColors()) {
+    if (state.colorMap[source]) continue;
+    state.colorMap[source] = nearestPaletteColor(source);
+  }
+}
+
+function pruneColorMap() {
+  const live = new Set(sourceColors());
+  for (const key of Object.keys(state.colorMap)) {
+    if (!live.has(key)) delete state.colorMap[key];
+  }
+}
+
+function nearestPaletteColor(hex) {
+  const rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  let target;
+  try { target = rgb(hex); } catch { return state.palette[0]?.hex; }
+  let best = state.palette[0]?.hex, bestDist = Infinity;
+  for (const color of state.palette) {
+    const c = rgb(color.hex);
+    const d = c.reduce((acc, v, i) => acc + (v - target[i]) ** 2, 0);
+    if (d < bestDist) { bestDist = d; best = color.hex; }
+  }
+  return best;
+}
+
+function renderColorPanel() {
+  const host = document.getElementById("colors-panel");
+  if (!host) return;
+  const sources = sourceColors();
+  const used = usedColors();
+  const over = used.length > state.maxColors;
+
+  host.innerHTML = `
+    <h2><span>Couleurs d'impression</span></h2>
+    <p class="hint">Une couleur = un filament. ${state.maxColors} au maximum pour une même pièce.</p>
+    <div class="color-block">
+      <p class="color-label">L'objet</p>
+      <div class="model-swatches"></div>
+    </div>
+    <div class="logo-colors"></div>
+    <p class="color-count ${over ? "is-over" : ""}">
+      <span class="color-dots"></span>
+      <span class="color-count-text"></span>
+    </p>
+  `;
+
+  host.querySelector(".model-swatches").appendChild(
+    swatchRow(state.modelColor, async (hex) => {
+      state.modelColor = hex;
+      applyModelColor();
+      renderColorPanel();
+      try {
+        const res = await fetch(`/api/order/session/${SESSION_ID}/colors`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model_color: hex }),
+        });
+        const data = await readJson(res);
+        if (!res.ok) throw new Error(data.error || "couleur refusée");
+      } catch (err) {
+        toastError(err.message);
+      }
+      updateSubmitState();
+    }));
+
+  const logoHost = host.querySelector(".logo-colors");
+  if (!sources.length) {
+    logoHost.innerHTML = '<p class="hint">Importez un logo pour choisir ses couleurs.</p>';
+  } else {
+    sources.forEach((source, i) => {
+      const block = document.createElement("div");
+      block.className = "color-block";
+      block.innerHTML = `<p class="color-label">
+        Logo — couleur ${i + 1}
+        <span class="color-source" style="background:${source}" title="Couleur d'origine du SVG"></span>
+      </p>`;
+      block.appendChild(swatchRow(state.colorMap[source], async (hex) => {
+        state.colorMap[source] = hex;
+        renderColorPanel();
+        try {
+          for (const panel of panels) {
+            for (const ctl of panel.controls) {
+              ctl.renderShapeList();
+              ctl.renderCombinedPreview();
+              await ctl.pushEditAll();
+              await ctl.refreshAll();
+            }
+          }
+        } catch (err) {
+          toastError(err.message);
+        }
+        updateSubmitState();
+      }));
+      logoHost.appendChild(block);
+    });
+  }
+
+  const dots = host.querySelector(".color-dots");
+  used.forEach((hex) => {
+    const dot = document.createElement("span");
+    dot.className = "color-dot";
+    dot.style.background = hex;
+    dot.title = colorLabel(hex);
+    dots.appendChild(dot);
+  });
+  host.querySelector(".color-count-text").textContent = over
+    ? `${used.length} couleurs sur ${state.maxColors} autorisées — réutilisez une couleur déjà choisie.`
+    : `${used.length} / ${state.maxColors} couleurs`;
+}
+
+// --- boot ----------------------------------------------------------------------
+let SESSION_ID = null;
+const engines = [];
+const panels = [];
+
 function updateSubmitState() {
-  const ready = zoneControllers.filter((z) => z.hasLogo && z.previewObject).length;
-  const total = zoneControllers.length;
-  const allReady = total > 0 && ready === total;
+  const ready = engines.filter((e) => e.hasLogo && e.previewObject).length;
+  const total = engines.length;
+  const over = usedColors().length > state.maxColors;
+  const allReady = total > 0 && ready === total && !over;
   document.getElementById("submit-btn").disabled = !allReady;
   const status = document.getElementById("submit-status");
-  if (status) {
-    status.textContent = allReady
-      ? (total > 1 ? "Vos logos sont prêts ✓" : "Votre logo est prêt ✓")
-      : (total > 1 ? `${ready}/${total} logos placés`
-                    : "Importez votre logo pour continuer");
-    status.classList.toggle("ready", allReady);
+  if (!status) return;
+  if (over) {
+    status.textContent = `Trop de couleurs (${usedColors().length}/${state.maxColors})`;
+  } else if (allReady) {
+    status.textContent = total > 1 ? "Vos logos sont prêts ✓" : "Votre logo est prêt ✓";
+  } else {
+    status.textContent = total > 1
+      ? `${ready}/${total} logos placés`
+      : "Importez votre logo pour continuer";
   }
+  status.classList.toggle("ready", allReady);
+}
+
+/** Zones the vendor marked as identical faces travel together. */
+function groupZones(zones) {
+  const groups = [];
+  const byKey = new Map();
+  for (const z of zones) {
+    const key = (z.group_key || "").trim();
+    if (!key) { groups.push([z]); continue; }
+    if (!byKey.has(key)) { const g = []; byKey.set(key, g); groups.push(g); }
+    byKey.get(key).push(z);
+  }
+  return groups;
 }
 
 async function boot() {
@@ -464,6 +872,13 @@ async function boot() {
     const res = await fetch(`/api/product/${PRODUCT_ID}`);
     const product = await readJson(res);
     if (!res.ok) throw new Error(product.error || "produit introuvable");
+
+    state.palette = product.palette || [];
+    state.maxColors = product.max_colors || 4;
+    state.defaultModelColor = product.default_model_color || null;
+    state.modelColor = state.defaultModelColor
+      ? nearestPaletteColor(state.defaultModelColor) : (state.palette[0]?.hex || null);
+
     loadAssembly(product.glb_url, product.bounds);
 
     const startRes = await fetch(`/api/order/${PRODUCT_ID}/start`, { method: "POST" });
@@ -477,14 +892,34 @@ async function boot() {
         <ol>
           <li>Déposez votre logo au format SVG.</li>
           <li>Glissez-le sur l'objet en 3D et ajustez sa taille.</li>
-          <li>Envoyez : vous recevez un numéro de commande.</li>
+          <li>Choisissez vos couleurs, puis envoyez.</li>
         </ol>
       </div>`;
-    for (const z of product.zones) {
-      const ctl = makeZoneController(z);
-      zoneControllers.push(ctl);
-      container.appendChild(ctl.el);
+
+    for (const group of groupZones(product.zones)) {
+      const groupEngines = group.map(makeEngine);
+      engines.push(...groupEngines);
+      const panel = makeGroupPanel(groupEngines);
+      panels.push(panel);
+      container.appendChild(panel.el);
     }
+
+    const colorsPanel = document.createElement("section");
+    colorsPanel.className = "zone-block colors-block";
+    colorsPanel.id = "colors-panel";
+    container.appendChild(colorsPanel);
+
+    // Tell the server about the color the object starts out in, so an order
+    // submitted without touching the swatches still records it.
+    if (state.modelColor) {
+      fetch(`/api/order/session/${SESSION_ID}/colors`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model_color: state.modelColor }),
+      }).catch(() => {});
+    }
+    applyModelColor();
+    renderColorPanel();
+
     document.getElementById("submit-bar").classList.remove("hidden");
     updateSubmitState();
   } catch (err) {
@@ -511,7 +946,6 @@ document.getElementById("view-full")?.addEventListener("click", () => {
 document.addEventListener("fullscreenchange", () => setTimeout(resize, 60));
 
 document.getElementById("submit-btn").addEventListener("click", async () => {
-  setGlobalError("");
   const btn = document.getElementById("submit-btn");
   btn.disabled = true;
   btn.textContent = "Envoi en cours…";
@@ -524,7 +958,7 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
     document.getElementById("result-overlay").classList.remove("hidden");
     document.getElementById("submit-bar").classList.add("hidden");
   } catch (err) {
-    setGlobalError(err.message);
+    toastError(err.message);
     btn.disabled = false;
     btn.textContent = "Envoyer ma commande";
   } finally {

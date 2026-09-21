@@ -676,3 +676,56 @@ input[type=range]::-moz-range-thumb {
 .danger-card h2 { color: var(--danger); }
 .page-head .row { align-items: center; }
 .submit-bar .submit-status.ready { color: var(--ok); font-weight: 600; }
+
+/* --- grouped faces (customer) ------------------------------------------- */
+.link-toggle { margin-bottom: 14px; }
+.group-body { display: flex; flex-direction: column; gap: 14px; }
+.sub-zone {
+  border: 1px solid var(--border-soft); border-radius: var(--r);
+  padding: 12px; background: var(--bg-deep);
+}
+.sub-zone-title {
+  margin: 0 0 8px; font-size: 0.85rem; font-weight: 650; color: var(--text-dim);
+}
+.zone-block h2 .badge { flex-shrink: 0; }
+
+/* --- color pickers ------------------------------------------------------- */
+.colors-block { border-bottom: none; }
+.color-block { margin-bottom: 14px; }
+.color-label {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 0 7px; font-size: 0.82rem; font-weight: 500; color: var(--muted);
+}
+.color-source {
+  width: 13px; height: 13px; border-radius: 4px; border: 1px solid var(--border);
+  display: inline-block;
+}
+.swatches { display: flex; flex-wrap: wrap; gap: 7px; }
+.swatch {
+  width: 28px; height: 28px; padding: 0; border-radius: 9px; cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 -6px 10px -6px rgba(0, 0, 0, 0.8);
+  transition: transform 0.12s var(--ease), box-shadow 0.15s;
+}
+.swatch:hover { transform: translateY(-2px); }
+.swatch.is-active {
+  box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent),
+              inset 0 -6px 10px -6px rgba(0, 0, 0, 0.8);
+}
+.color-count {
+  display: flex; align-items: center; gap: 9px; margin: 16px 0 0;
+  padding: 9px 12px; border-radius: var(--r); font-size: 0.82rem;
+  background: var(--raised); border: 1px solid var(--border); color: var(--text-dim);
+}
+.color-count.is-over {
+  background: var(--danger-soft); border-color: rgba(255, 107, 125, 0.45); color: var(--danger);
+}
+.color-dots { display: inline-flex; gap: 4px; flex-shrink: 0; }
+.color-dot {
+  width: 14px; height: 14px; border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+/* --- order colors, on the admin side ------------------------------------ */
+.order-colors { display: inline-flex; align-items: center; gap: 5px; }
+.order-colors .color-dot { width: 15px; height: 15px; }

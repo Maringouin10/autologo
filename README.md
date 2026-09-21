@@ -56,11 +56,19 @@ products, or **/tool** for the plain single-model tool.
    past orders are unaffected, and you can't save a product with no zones
    left. The 3D model itself is fixed once published — the zones are
    pinned to that mesh's faces — so changing model means a new product.
-4. **Customer side** (`/o/<product_id>`, no login): upload an SVG, exclude
+4. **Identical faces.** A cube's four sides, a keychain's two faces… mark
+   them as one **groupe de faces identiques** in the zone form (the
+   *Faces identiques* picker: pick a face, choose the group, add it, then
+   click the next face — the picker stays on the same group). The customer
+   then gets a single control for the whole group with two buttons:
+   **Le même partout** (one logo, placed once, applied to every face of the
+   group) or **Un par face** (one dropzone and one placement per face).
+   Ungrouped zones behave exactly as before.
+5. **Customer side** (`/o/<product_id>`, no login): upload an SVG, exclude
    shapes/mirror it if needed, drag/resize/fit it into the approved zone(s),
-   hit **Envoyer ma commande** — they get a short order code back. Nothing
-   else happens automatically yet (no payment, no email) — wire that code
-   into whatever order form/checkout you already use.
+   pick the filament colors, hit **Envoyer ma commande** — they get a short
+   order code back. Nothing else happens automatically yet (no payment, no
+   email) — wire that code into whatever order form/checkout you already use.
 
 ## How the plain tool works
 
@@ -97,6 +105,30 @@ filament/color to each.
 | `SESSION_TTL_HOURS` | `6` | how long an upload session (and its files) is kept |
 | `MAX_UPLOAD_MB` | `200` | upload size cap |
 
+## Couleurs d'impression
+
+The customer picks a filament for **the object itself** and one for **each
+color their logo uses**, from a palette of what you stock — a color counter
+keeps the whole order within `MAX_PRINT_COLORS` (4 by default: one AMS/MMU's
+worth), and an order that exceeds it can't be submitted.
+
+- The palette lives in `app/config.py` (`DEFAULT_PALETTE`) and can be replaced
+  per-deployment with the **`FILAMENT_COLORS`** env var — JSON, e.g.
+  `[{"name":"Noir","hex":"#1c1c1e"},{"name":"PETG rouge","hex":"#d92b2b"}]`.
+  An unparseable value falls back to the built-in list rather than leaving a
+  customer with no colors to pick.
+- Picks are applied everywhere at once: the 3D view repaints the object and
+  the logo, the shape thumbnails show the chosen filaments, and the exported
+  3MF carries them as real per-object display colors — trimesh's own 3MF
+  writer drops color entirely, so the app injects the `<basematerials>`
+  resource itself (`meshwork._inject_3mf_colors`). How far a given slicer
+  honors that varies, so **the admin also lists each order's colors** as
+  swatches (hover for the filament name) next to its download button.
+- Two source colors mapped to the same filament merge into one object in the
+  export — one filament, one object.
+- The colors are chosen per order, not per product: `/tool` (the plain
+  single-model tool) still exports in the model's own colors.
+
 ## L'interface
 
 Toutes les pages partagent un même thème (`app/static/css/style.css` — tous
@@ -119,7 +151,7 @@ Jinja commun (`app/templates/base.html`).
 - **Admin** : les produits sont des cartes (couleur du modèle, nombre de
   zones, pastille « à traiter » s'il y a des commandes en attente) et les
   dates sont relatives (« il y a 2 h »), l'horodatage exact restant en
-  infobulle.
+  infobulle. Chaque commande affiche les filaments choisis en pastilles.
 
 ## Notes
 

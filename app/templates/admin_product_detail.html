@@ -52,12 +52,25 @@
     {% else %}
       <div class="table-wrap">
         <table class="admin-table">
-          <thead><tr><th>Numéro</th><th>Reçue</th><th class="actions">Actions</th></tr></thead>
+          <thead><tr><th>Numéro</th><th>Reçue</th><th>Couleurs</th><th class="actions">Actions</th></tr></thead>
           <tbody>
             {% for o in orders %}
             <tr>
               <td><code>{{ o['code'] }}</code></td>
               <td class="muted" title="{{ o['created_at']|fr_datetime }}">{{ o['created_at']|fr_ago }}</td>
+              <td>
+                {% set colors = o['colors_json']|order_colors %}
+                {% if colors %}
+                  <span class="order-colors">
+                    {% for c in colors %}
+                      <span class="color-dot" style="background:{{ c['hex'] }}"
+                            title="{{ c['role'] }} — {{ c['name'] }}"></span>
+                    {% endfor %}
+                  </span>
+                {% else %}
+                  <span class="muted">—</span>
+                {% endif %}
+              </td>
               <td class="actions">
                 <a class="btn btn-soft btn-sm" href="{{ url_for('admin_download_order', code=o['code']) }}">⬇ 3MF</a>
                 <form method="post" action="{{ url_for('admin_complete_order', code=o['code']) }}"
@@ -76,15 +89,22 @@
 
   <section class="admin-card">
     <h2>Zones personnalisables <span class="badge">{{ zones|length }}</span></h2>
-    <p class="card-sub">Réglages verrouillés : le client place son logo, mais ne peut pas changer ces paramètres d'impression.</p>
+    <p class="card-sub">Réglages verrouillés : le client place son logo, mais ne peut pas changer ces paramètres d'impression. Les zones d'un même groupe sont des faces identiques — le client choisit un seul logo pour toutes, ou un par face.</p>
     <div class="table-wrap">
       <table class="admin-table">
-        <thead><tr><th>Zone</th><th>Pièce</th><th>Mode</th><th class="num">Profondeur</th></tr></thead>
+        <thead><tr><th>Zone</th><th>Pièce</th><th>Groupe</th><th>Mode</th><th class="num">Profondeur</th></tr></thead>
         <tbody>
           {% for z in zones %}
           <tr>
             <td>{{ z['label'] }}</td>
             <td class="muted">{{ z['part_name'] }}</td>
+            <td>
+              {% if z['group_key'] %}
+                <span class="badge badge-accent">{{ z['group_key'] }}</span>
+              {% else %}
+                <span class="muted">—</span>
+              {% endif %}
+            </td>
             <td>
               <span class="badge {{ 'badge-accent' if z['mode'] == 'emboss' else '' }}">
                 {{ 'Relief' if z['mode'] == 'emboss' else 'Gravé' }}

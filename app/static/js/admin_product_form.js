@@ -168,6 +168,7 @@ async function bootEditMode() {
       state.zones.push({ ...z, marker: addZoneMarker(z.face) });
     }
     renderZonesList();
+    refreshGroupOptions();
     markStepDone("step-model");
     markStepDone("step-zones-list", state.zones.length > 0);
     enableStep("step-zone", true);
@@ -210,6 +211,7 @@ renderer.domElement.addEventListener("click", async (ev) => {
       `Pièce "${data.part_name}" — face ${data.width.toFixed(1)} × ${data.height.toFixed(1)} mm`;
     document.getElementById("zone-form").classList.remove("hidden");
     document.getElementById("zone-label").value = `Zone ${state.zones.length + 1}`;
+    refreshGroupOptions(groupSelect.value);
   } catch (err) {
     document.getElementById("face-info").textContent = "Aucune face sélectionnée.";
     setError(err.message);
@@ -238,6 +240,45 @@ document.querySelectorAll('input[name=zone-mode]').forEach((radio) => {
   });
 });
 
+// --- groups of identical faces ------------------------------------------------
+// A group key is just its display label ("Groupe 1"): zones carrying the same
+// one are the same face repeated, which is what lets the customer choose
+// between one logo for all of them and one per face.
+const groupSelect = document.getElementById("zone-group");
+
+function existingGroups() {
+  const keys = [];
+  for (const z of state.zones) {
+    if (z.group_key && !keys.includes(z.group_key)) keys.push(z.group_key);
+  }
+  return keys;
+}
+
+function refreshGroupOptions(selected = "") {
+  const keys = existingGroups();
+  groupSelect.innerHTML =
+    '<option value="">Face indépendante</option>' +
+    keys.map((k) => `<option value="${k}">${k}</option>`).join("") +
+    '<option value="__new__">＋ Nouveau groupe de faces identiques</option>';
+  groupSelect.value = keys.includes(selected) ? selected : "";
+}
+
+groupSelect.addEventListener("change", () => {
+  if (groupSelect.value !== "__new__") return;
+  const keys = existingGroups();
+  let n = keys.length + 1;
+  while (keys.includes(`Groupe ${n}`)) n += 1;
+  const key = `Groupe ${n}`;
+  refreshGroupOptions(key);
+  // The new group has no zone yet, so refreshGroupOptions can't list it —
+  // add it by hand and keep it selected for the zone about to be added.
+  const opt = document.createElement("option");
+  opt.value = key;
+  opt.textContent = key;
+  groupSelect.insertBefore(opt, groupSelect.lastElementChild);
+  groupSelect.value = key;
+});
+
 function renderZonesList() {
   const list = document.getElementById("zones-list");
   list.innerHTML = "";
@@ -245,8 +286,9 @@ function renderZonesList() {
     const card = document.createElement("div");
     card.className = "zone-card";
     card.innerHTML =
-      `<span>${z.label} — ${z.part_name} — ${z.mode === "emboss" ? "relief" : "gravé"}, ${z.depth_mm} mm</span>` +
-      `<button type="button" class="zone-remove" title="Retirer">✕</button>`;
+      `<span>${z.label} — ${z.part_name} — ${z.mode === "emboss" ? "relief" : "gravé"}, ${z.depth_mm} mm` +
+      (z.group_key ? ` <span class="badge badge-accent">${z.group_key}</span>` : "") +
+      `</span><button type="button" class="zone-remove" title="Retirer">✕</button>`;
     card.querySelector(".zone-remove").addEventListener("click", () => {
       scene.remove(z.marker);
       state.zones.splice(i, 1);
@@ -264,6 +306,7 @@ document.getElementById("add-zone-btn").addEventListener("click", () => {
   const zone = {
     label: document.getElementById("zone-label").value.trim() || `Zone ${state.zones.length + 1}`,
     part_name: state.currentFace.part_name,
+    group_key: groupSelect.value === "__new__" ? "" : groupSelect.value,
     mode,
     depth_mm: parseFloat(zoneSliders.depth.value),
     sink_mm: parseFloat(zoneSliders.sink.value),
@@ -289,6 +332,9 @@ document.getElementById("add-zone-btn").addEventListener("click", () => {
   state.currentFace = null;
   document.getElementById("zone-form").classList.add("hidden");
   document.getElementById("face-info").textContent = "Aucune face sélectionnée.";
+  // Adding the other faces of the same group is the common next step, so the
+  // picker stays on the group that was just used.
+  refreshGroupOptions(zone.group_key);
 });
 
 // --- publish / save -----------------------------------------------------------
@@ -311,8 +357,9 @@ document.getElementById("publish-btn").addEventListener("click", async () => {
         // `id` marks a zone that already exists: the server keeps its stored
         // face and only updates the editable fields. `face_index` marks a
         // newly picked one, which the server resolves itself.
-        zones: state.zones.map(({ id, label, mode, depth_mm, sink_mm, fill_extra_mm, face_index }) =>
-          ({ id, label, mode, depth_mm, sink_mm, fill_extra_mm, face_index })),
+        zones: state.zones.map(({ id, label, mode, depth_mm, sink_mm, fill_extra_mm,
+                                  face_index, group_key }) =>
+          ({ id, label, mode, depth_mm, sink_mm, fill_extra_mm, face_index, group_key })),
       }),
     });
     const data = await readJson(res);

@@ -95,6 +95,26 @@ def fr_ago(value: str) -> str:
     return fr_datetime(value).split(" à ")[0]
 
 
+@app.template_filter("order_colors")
+def order_colors_filter(value) -> list[dict]:
+    """An order's chosen filaments as a flat list of {hex, name, role},
+    ready to render as swatches."""
+    try:
+        data = json.loads(value or "{}")
+    except (ValueError, TypeError):
+        return []
+    out = []
+    model = data.get("model")
+    if isinstance(model, dict) and model.get("hex"):
+        out.append({"hex": model["hex"], "name": model.get("name") or model["hex"],
+                     "role": "Objet"})
+    for entry in data.get("logo") or []:
+        if isinstance(entry, dict) and entry.get("hex"):
+            out.append({"hex": entry["hex"], "name": entry.get("name") or entry["hex"],
+                         "role": "Logo"})
+    return out
+
+
 def _product_swatch(product) -> str:
     """The product's dominant part color (read from its 3MF) as a CSS color,
     used for the gallery/admin card thumbnails."""
@@ -220,6 +240,7 @@ def admin_edit_product(product_id):
         "depth_mm": z["depth_mm"],
         "sink_mm": z["sink_mm"],
         "fill_extra_mm": z["fill_extra_mm"],
+        "group_key": z["group_key"],
         "face": json.loads(z["face_json"]),   # the viewer needs it to draw the zone marker
     } for z in db.list_zones(product_id)]
     return render_template("admin_product_form.html", product=product,
@@ -654,6 +675,9 @@ def _build_zones(zones_in: list, sess, existing: dict) -> list[dict]:
             "depth_mm": max(0.1, float(z.get("depth_mm", 1.5))),
             "sink_mm": max(0.0, float(z.get("sink_mm", 0.3))),
             "fill_extra_mm": max(0.0, float(z.get("fill_extra_mm", 0.0))),
+            # Zones sharing a group key are identical faces: the customer
+            # decides once whether they carry the same logo or different ones.
+            "group_key": str(z.get("group_key") or "")[:40],
         })
     return out
 
@@ -729,6 +753,7 @@ def _zone_public(z) -> dict:
     face = json.loads(z["face_json"])
     return {
         "id": z["id"], "label": z["label"],
+        "group_key": z["group_key"] if "group_key" in z.keys() else "",
         "width": face["width"], "height": face["height"],
         "origin": face["origin"], "normal": face["normal"],
         "u": face["u"], "v": face["v"],
@@ -742,11 +767,18 @@ def api_product(product_id):
     if product is None:
         abort(404, "produit introuvable")
     zones = db.list_zones(product_id)
+    part_colors = orders.product_part_colors(product)
+    default_model_color = next(iter(part_colors.values()), None)
     return jsonify({
         "name": product["name"],
         "glb_url": url_for("product_glb", product_id=product_id),
         "bounds": json.loads(product["bounds_json"]),
         "zones": [_zone_public(z) for z in zones],
+        "palette": config.PALETTE,
+        "max_colors": config.MAX_PRINT_COLORS,
+        # What the object prints in if the customer changes nothing: the
+        # color the vendor's own 3MF carries, else the viewer's default.
+        "default_model_color": default_model_color or mw.DEFAULT_MODEL_HEX,
     })
 
 
@@ -825,6 +857,11 @@ def order_edit_logo(order_session_id, zone_id):
     work.excluded_shapes = {i for i in excluded if 0 <= i < n}
     work.flip_h = bool(data.get("flip_h", False))
     work.flip_v = bool(data.get("flip_v", False))
+    if "colors" in data:
+        try:
+            work.color_map = _clean_color_map(data.get("colors"))
+        except ValueError as exc:
+            return _err(exc)
     try:
         minx, miny, maxx, maxy = mw.logo_bounds(work.active_logo_polygons())
     except mw.MeshError as exc:
@@ -833,6 +870,39 @@ def order_edit_logo(order_session_id, zone_id):
         "ok": True,
         "logo_bounds": {"width": round(float(maxx - minx), 2),
                          "height": round(float(maxy - miny), 2)},
+        "colors_used": orders.order_colors(sess),
+        "max_colors": config.MAX_PRINT_COLORS,
+    })
+
+
+def _clean_color_map(raw) -> dict[str, str]:
+    """{svg_color: filament} keeping only colors the palette actually
+    offers — a customer can't order a filament the vendor doesn't stock."""
+    if not isinstance(raw, dict):
+        raise ValueError("couleurs invalides")
+    allowed = {c["hex"] for c in config.PALETTE}
+    out = {}
+    for source, chosen in raw.items():
+        chosen = str(chosen or "").strip().lower()
+        if chosen not in allowed:
+            raise ValueError(f"couleur indisponible: {chosen or '(vide)'}")
+        out[str(source).strip().lower()] = chosen
+    return out
+
+
+@app.route("/api/order/session/<order_session_id>/colors", methods=["POST"])
+def order_set_model_color(order_session_id):
+    """The filament the object itself prints in."""
+    sess = _require_order_session(order_session_id)
+    data = request.get_json(force=True, silent=True) or {}
+    chosen = str(data.get("model_color") or "").strip().lower()
+    if chosen and chosen not in {c["hex"] for c in config.PALETTE}:
+        return _err(ValueError("couleur indisponible"))
+    sess.model_color = chosen or None
+    return jsonify({
+        "ok": True,
+        "colors_used": orders.order_colors(sess),
+        "max_colors": config.MAX_PRINT_COLORS,
     })
 
 
@@ -854,7 +924,7 @@ def order_preview(order_session_id, zone_id):
 
     try:
         face = orders.zone_face(zone_row, db.get_product(sess.product_id))
-        mesh = mw.preview_logo(work.active_logo_polygons(), face, work.placement_params())
+        mesh = mw.preview_logo(work.printed_polygons(), face, work.placement_params())
     except mw.MeshError as exc:
         return _err(exc)
     return _mesh_to_glb_response(mesh)

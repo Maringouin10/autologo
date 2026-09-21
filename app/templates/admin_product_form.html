@@ -56,6 +56,18 @@
           <label for="zone-label">Nom de la zone</label>
           <input type="text" id="zone-label" placeholder="Zone 1">
         </div>
+        <div class="field">
+          <label for="zone-group">Faces identiques</label>
+          <select id="zone-group">
+            <option value="">Face indépendante</option>
+            <option value="__new__">＋ Nouveau groupe de faces identiques</option>
+          </select>
+        </div>
+        <p class="hint" style="margin:-6px 0 12px">
+          Regroupez les faces identiques (les 4 côtés d'un cube, par exemple) :
+          le client choisira alors entre <b>le même logo partout</b> ou
+          <b>un logo par face</b>.
+        </p>
         <div class="mode-choice">
           <label class="opt">
             <input type="radio" name="zone-mode" value="emboss" checked>

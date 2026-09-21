@@ -34,6 +34,8 @@ class ZoneWork:
     excluded_shapes: set = field(default_factory=set)
     flip_h: bool = False
     flip_v: bool = False
+    # {svg_color: chosen filament color} — empty means "print it as drawn".
+    color_map: dict = field(default_factory=dict)
     width_mm: float = 20.0
     rotation_deg: float = 0.0
     offset_x_mm: float = 0.0
@@ -63,6 +65,15 @@ class ZoneWork:
         self.excluded_shapes = set()
         self.flip_h = False
         self.flip_v = False
+        self.color_map = {}
+
+    def printed_polygons(self) -> list:
+        """The shapes as they will actually print: the included ones, mirrored
+        as asked, re-tagged with the filament colors the customer picked."""
+        return mw.recolor_shapes(self.active_logo_polygons(), self.color_map)
+
+    def printed_colors(self) -> list[str]:
+        return mw.logo_colors(self.printed_polygons())
 
     def placement_params(self) -> "mw.PlacementParams":
         return mw.PlacementParams(width_mm=self.width_mm, rotation_deg=self.rotation_deg,
@@ -76,6 +87,7 @@ class OrderSession:
     product_id: str
     created_at: float = field(default_factory=time.time)
     zones: dict = field(default_factory=dict)  # zone_id -> ZoneWork
+    model_color: str | None = None             # filament picked for the object itself
 
     def touch(self) -> None:
         self.created_at = time.time()
@@ -84,6 +96,40 @@ class OrderSession:
         if zone_id not in self.zones:
             self.zones[zone_id] = ZoneWork(zone_id=zone_id, dir=self.dir)
         return self.zones[zone_id]
+
+
+def _hex(rgb) -> str:
+    return "#{:02x}{:02x}{:02x}".format(*rgb[:3])
+
+
+def product_part_colors(product) -> dict[str, str]:
+    """{part_name: '#rrggbb'} as extracted from the vendor's 3MF, if any."""
+    try:
+        colors = json.loads(product["colors_json"] or "{}")
+    except (ValueError, TypeError):
+        return {}
+    return {name: _hex(rgb) for name, rgb in colors.items()
+            if isinstance(rgb, (list, tuple)) and len(rgb) >= 3}
+
+
+def order_colors(sess: "OrderSession") -> list[str]:
+    """Every distinct filament this order currently needs: the object's
+    color plus each zone's logo colors. What MAX_PRINT_COLORS caps."""
+    used: list[str] = []
+    for color in ([sess.model_color] if sess.model_color else []):
+        if color not in used:
+            used.append(color)
+    for work in sess.zones.values():
+        if not work.has_logo():
+            continue
+        try:
+            colors = work.printed_colors()
+        except mw.MeshError:
+            continue
+        for color in colors:
+            if color not in used:
+                used.append(color)
+    return used
 
 
 def start(product_id: str) -> OrderSession:
@@ -180,6 +226,17 @@ def submit(sess: OrderSession) -> str:
     working_parts = {name: mesh.copy() for name, mesh in geoms.items()}
     touched_parts: set[str] = set()
     named: dict = {}
+    # What each exported object should print in: the customer's object color
+    # when they picked one, otherwise whatever the vendor's own 3MF said.
+    part_colors = product_part_colors(product)
+    object_colors: dict[str, str] = {}
+
+    used = order_colors(sess)
+    if len(used) > config.MAX_PRINT_COLORS:
+        raise mw.MeshError(
+            f"cette commande demande {len(used)} couleurs, or l'impression en "
+            f"accepte {config.MAX_PRINT_COLORS} au maximum — réutilisez une "
+            "couleur déjà choisie pour l'une des formes.")
 
     for zone_id, work in sess.zones.items():
         row = zone_rows[zone_id]
@@ -187,7 +244,7 @@ def submit(sess: OrderSession) -> str:
         if part_name not in working_parts:
             raise mw.MeshError(f"pièce '{part_name}' introuvable dans le modèle")
         face = zone_face(row, product)
-        shapes = work.active_logo_polygons()
+        shapes = work.printed_polygons()
         params = work.placement_params()
         touched_parts.add(part_name)
 
@@ -201,7 +258,9 @@ def submit(sess: OrderSession) -> str:
         # One object per fill color, so the slicer can assign a filament to
         # each; the zone id keeps names unique across a multi-zone product.
         for i, (color, mesh) in enumerate(logos.items()):
-            named[f"{part_name}_logo_{zone_id}_{i + 1}_{color.lstrip('#')}"] = mesh
+            name = f"{part_name}_logo_{zone_id}_{i + 1}_{color.lstrip('#')}"
+            named[name] = mesh
+            object_colors[name] = color
 
     for name in touched_parts:
         named[name] = working_parts[name]
@@ -209,13 +268,41 @@ def submit(sess: OrderSession) -> str:
         for name, mesh in working_parts.items():
             if name not in touched_parts:
                 named[name] = mesh
+    for name in named:
+        if name in object_colors:
+            continue
+        color = sess.model_color or part_colors.get(name)
+        if color:
+            object_colors[name] = color
 
-    data_3mf = mw.export_3mf(named)
+    data_3mf = mw.export_3mf(named, object_colors)
 
     code = _new_order_code()
     order_dir = config.ORDERS_DIR / code
     order_dir.mkdir(parents=True, exist_ok=True)
     output_path = order_dir / "output.3mf"
     output_path.write_bytes(data_3mf)
-    db.create_order(code, sess.product_id, str(output_path))
+    db.create_order(code, sess.product_id, str(output_path),
+                     json.dumps(colors_summary(sess)))
     return code
+
+
+def colors_summary(sess: OrderSession) -> dict:
+    """What the vendor needs to load in the printer, in a shape the admin
+    pages can render directly: the object's filament and the logo's."""
+    logo_colors: list[str] = []
+    for work in sess.zones.values():
+        if not work.has_logo():
+            continue
+        try:
+            colors = work.printed_colors()
+        except mw.MeshError:
+            continue
+        for color in colors:
+            if color not in logo_colors:
+                logo_colors.append(color)
+    return {
+        "model": {"hex": sess.model_color, "name": config.color_name(sess.model_color)}
+                  if sess.model_color else None,
+        "logo": [{"hex": c, "name": config.color_name(c)} for c in logo_colors],
+    }

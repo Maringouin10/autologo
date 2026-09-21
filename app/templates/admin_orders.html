@@ -35,7 +35,7 @@
       <div class="table-wrap">
         <table class="admin-table">
           <thead>
-            <tr><th>Numéro</th><th>Produit</th><th>Reçue</th><th class="actions">Actions</th></tr>
+            <tr><th>Numéro</th><th>Produit</th><th>Reçue</th><th>Couleurs</th><th class="actions">Actions</th></tr>
           </thead>
           <tbody>
             {% for o in orders %}
@@ -43,6 +43,19 @@
               <td><code>{{ o['code'] }}</code></td>
               <td>{{ o['product_name'] }}</td>
               <td class="muted" title="{{ o['created_at']|fr_datetime }}">{{ o['created_at']|fr_ago }}</td>
+              <td>
+                {% set colors = o['colors_json']|order_colors %}
+                {% if colors %}
+                  <span class="order-colors">
+                    {% for c in colors %}
+                      <span class="color-dot" style="background:{{ c['hex'] }}"
+                            title="{{ c['role'] }} — {{ c['name'] }}"></span>
+                    {% endfor %}
+                  </span>
+                {% else %}
+                  <span class="muted">—</span>
+                {% endif %}
+              </td>
               <td class="actions">
                 <a class="btn btn-soft btn-sm" href="{{ url_for('admin_download_order', code=o['code']) }}">⬇ 3MF</a>
                 <form method="post" action="{{ url_for('admin_complete_order', code=o['code']) }}"
