@@ -1,46 +1,62 @@
-<!doctype html>
-<html lang="fr">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AutoLogo — Commandes</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-</head>
-<body class="admin-body">
-  <header class="topbar">
-    <h1>🏷️ Commandes</h1>
-    <a class="muted" href="{{ url_for('admin_home') }}">← Produits</a>
-    <a class="logout" href="{{ url_for('logout') }}">Déconnexion</a>
-  </header>
+{% extends "base.html" %}
+{% block title %}AutoLogo — Commandes{% endblock %}
+{% block body_class %}admin-body{% endblock %}
 
-  <main class="admin-main">
+{% block header %}
+<header class="topbar">
+  <a class="brand" href="{{ url_for('admin_home') }}"><span class="brand-mark">🏷️</span> <span>AutoLogo</span></a>
+  <nav class="topbar-actions">
+    <a class="nav-link" href="{{ url_for('admin_home') }}">Produits</a>
+    <a class="nav-link is-active" href="{{ url_for('admin_orders') }}">Commandes</a>
+    <a class="nav-link" href="{{ url_for('gallery') }}" target="_blank" rel="noopener">Boutique ↗</a>
+    <a class="logout" href="{{ url_for('logout') }}">Déconnexion</a>
+  </nav>
+</header>
+{% endblock %}
+
+{% block content %}
+<main class="admin-main">
+  <div class="page-head">
+    <div>
+      <h1>Commandes à traiter</h1>
+      <p>Téléchargez le 3MF, imprimez, puis marquez la commande comme terminée pour la retirer de la liste.</p>
+    </div>
+    <span class="badge {{ 'badge-warn' if orders else 'badge-ok' }}">{{ orders|length }} en attente</span>
+  </div>
+
+  {% if not orders %}
+    <div class="empty">
+      <span class="empty-icon">🎉</span>
+      <h3>Tout est traité</h3>
+      <p>Aucune commande en attente. Les nouvelles commandes apparaîtront ici automatiquement.</p>
+    </div>
+  {% else %}
     <section class="admin-card">
-      <h2>À traiter ({{ orders|length }})</h2>
-      {% if not orders %}
-        <p class="hint">Aucune commande en attente.</p>
-      {% else %}
+      <div class="table-wrap">
         <table class="admin-table">
-          <thead><tr><th>Numéro</th><th>Produit</th><th>Reçue le</th><th></th><th></th></tr></thead>
+          <thead>
+            <tr><th>Numéro</th><th>Produit</th><th>Reçue</th><th class="actions">Actions</th></tr>
+          </thead>
           <tbody>
             {% for o in orders %}
             <tr>
               <td><code>{{ o['code'] }}</code></td>
               <td>{{ o['product_name'] }}</td>
-              <td class="muted">{{ o['created_at'][:16].replace('T', ' ') }}</td>
-              <td><a class="btn-link small" href="{{ url_for('admin_download_order', code=o['code']) }}">⬇ Télécharger</a></td>
-              <td>
+              <td class="muted" title="{{ o['created_at']|fr_datetime }}">{{ o['created_at']|fr_ago }}</td>
+              <td class="actions">
+                <a class="btn btn-soft btn-sm" href="{{ url_for('admin_download_order', code=o['code']) }}">⬇ 3MF</a>
                 <form method="post" action="{{ url_for('admin_complete_order', code=o['code']) }}"
-                      onsubmit="return confirm('Marquer cette commande comme terminée ? Elle disparaîtra de cette liste.');">
+                      onsubmit="return confirm('Marquer la commande {{ o['code'] }} comme terminée ? Elle disparaîtra de cette liste.');">
                   <input type="hidden" name="next" value="{{ url_for('admin_orders') }}">
-                  <button type="submit" class="btn-link small done-btn">✓ Terminée</button>
+                  <button type="submit" class="btn btn-ok btn-sm">✓ Terminée</button>
                 </form>
               </td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
-      {% endif %}
+      </div>
     </section>
-  </main>
-</body>
-</html>
+  {% endif %}
+</main>
+{% endblock %}

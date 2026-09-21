@@ -1,24 +1,21 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import {
+  readJson, markDropzoneFilled, setBusy, toastError, wireCopyButtons,
+} from "./ui.js";
 
 const PRODUCT_ID = document.body.dataset.productId;
-
-async function readJson(res) {
-  const text = await res.text();
-  try { return JSON.parse(text); }
-  catch { return { error: text ? text.slice(0, 200) : `erreur HTTP ${res.status}` }; }
-}
 
 // --- three.js scene setup ----------------------------------------------------
 const viewerEl = document.getElementById("viewer");
 const hintEl = document.getElementById("viewer-hint");
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0f1115);
+// Transparent canvas: the viewer's CSS gradient shows through (see style.css).
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10000);
 camera.position.set(80, 80, 80);
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 viewerEl.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -82,7 +79,9 @@ function pickPreviewMaterial(mesh) {
   return mesh.geometry.attributes.color ? coloredPreviewMaterial : previewMaterial;
 }
 
+let lastBounds = null;
 function fitCameraTo(bounds) {
+  if (bounds) lastBounds = bounds;
   const min = new THREE.Vector3(...bounds.min), max = new THREE.Vector3(...bounds.max);
   const size = new THREE.Vector3().subVectors(max, min);
   const center = new THREE.Vector3().addVectors(min, max).multiplyScalar(0.5);
@@ -105,8 +104,11 @@ function loadAssembly(url, bounds) {
     scene.add(mesh);
     scene.add(new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry, 25), edgeMaterial));
     fitCameraTo(bounds);
-    hintEl.textContent = "Glissez votre logo dans la zone en surbrillance.";
-  }, undefined, (err) => { hintEl.textContent = "échec du chargement du modèle: " + err.message; });
+    hintEl.textContent = "Déposez votre logo à gauche, puis glissez-le sur l'objet.";
+  }, undefined, (err) => {
+    hintEl.textContent = "Échec du chargement du modèle.";
+    toastError("Échec du chargement du modèle 3D : " + err.message);
+  });
 }
 
 // --- shape-picker helpers (svg thumbnails) --------------------------------------
@@ -188,41 +190,50 @@ function makeZoneController(z) {
   const el = document.createElement("div");
   el.className = "zone-block";
   el.innerHTML = `
-    <h2>${z.label}</h2>
-    <p class="zone-status">Aucun logo importé.</p>
+    <h2><span class="zone-title"></span></h2>
+    <p class="zone-status">En attente de votre logo</p>
     <label class="dropzone zone-drop">
       <input type="file" accept=".svg" hidden class="zone-file-input">
-      <span class="zone-drop-label">Fichier .svg — cliquez ou déposez</span>
+      <span class="dz-icon">🎨</span>
+      <span class="dz-main">Cliquez ou déposez votre logo</span>
+      <span class="dz-sub">Fichier .svg</span>
     </label>
     <div class="zone-edit hidden">
-      <p class="hint">Décochez une forme pour l'exclure.</p>
+      <p class="hint">Décochez une forme pour l'exclure du logo imprimé.</p>
       <div class="shape-list zone-shape-list"></div>
       <div class="flip-row">
-        <button type="button" class="toggle-btn zone-flip-h">⇋ Miroir horizontal</button>
-        <button type="button" class="toggle-btn zone-flip-v">⇵ Miroir vertical</button>
+        <button type="button" class="toggle-btn zone-flip-h">⇋ Miroir H</button>
+        <button type="button" class="toggle-btn zone-flip-v">⇵ Miroir V</button>
       </div>
       <div class="combined-preview zone-combined-wrap"><svg></svg></div>
     </div>
     <div class="zone-placement hidden">
-      <button type="button" class="zone-fit-btn">⤢ Ajuster à la plaque (max)</button>
+      <p class="hint" style="margin-bottom:10px">
+        <b>Glissez le logo</b> directement sur l'objet en 3D, ou utilisez les curseurs.
+      </p>
+      <button type="button" class="btn btn-ghost btn-block zone-fit-btn" style="margin-bottom:14px">
+        ⤢ Agrandir au maximum
+      </button>
       <div class="field">
-        <label>Largeur (mm) <span class="zone-width-val"></span></label>
+        <label>Taille <span class="zone-width-val val"></span></label>
         <input type="range" class="zone-width" min="1" max="${Math.max(z.width, z.height) * 1.5}" step="0.5" value="${z.suggested_width_mm}">
       </div>
       <div class="field">
-        <label>Rotation (°) <span class="zone-rot-val"></span></label>
+        <label>Rotation <span class="zone-rot-val val"></span></label>
         <input type="range" class="zone-rot" min="0" max="360" step="1" value="0">
       </div>
       <div class="field">
-        <label>Décalage X (mm) <span class="zone-dx-val"></span></label>
+        <label>Décalage horizontal <span class="zone-dx-val val"></span></label>
         <input type="range" class="zone-dx" min="${-z.width}" max="${z.width}" step="0.2" value="0">
       </div>
       <div class="field">
-        <label>Décalage Y (mm) <span class="zone-dy-val"></span></label>
+        <label>Décalage vertical <span class="zone-dy-val val"></span></label>
         <input type="range" class="zone-dy" min="${-z.height}" max="${z.height}" step="0.2" value="0">
       </div>
     </div>
   `;
+  // The label is vendor-supplied text: set it as text, never as HTML.
+  el.querySelector(".zone-title").textContent = z.label;
 
   const ctl = {
     id: z.id, el, origin, normal, u, v, plane,
@@ -314,13 +325,15 @@ function makeZoneController(z) {
   async function handleFile(file) {
     setGlobalError("");
     status.textContent = "Import en cours…";
+    setBusy(true, "Lecture de votre logo…");
     const fd = new FormData();
     fd.append("file", file);
     try {
       const res = await fetch(`/api/order/session/${SESSION_ID}/zone/${z.id}/logo`, { method: "POST", body: fd });
       const data = await readJson(res);
       if (!res.ok) throw new Error(data.error || "échec de l'import");
-      el.querySelector(".zone-drop-label").textContent = file.name;
+      markDropzoneFilled(el.querySelector(".zone-drop"), file.name,
+                          `${data.shapes.length} forme(s) — cliquez pour changer`);
       ctl.hasLogo = true;
       ctl.shapes = data.shapes;
       ctl.excluded = new Set();
@@ -332,12 +345,14 @@ function makeZoneController(z) {
       renderCombinedPreview();
       el.querySelector(".zone-edit").classList.remove("hidden");
       el.querySelector(".zone-placement").classList.remove("hidden");
-      status.textContent = "Logo importé.";
+      status.textContent = "✓ Logo placé — ajustez-le à votre goût";
       status.classList.add("ready");
       requestPreview();
     } catch (err) {
-      status.textContent = "";
+      status.textContent = "En attente de votre logo";
       setGlobalError(err.message);
+    } finally {
+      setBusy(false);
     }
   }
   fileInput.addEventListener("change", () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
@@ -425,12 +440,22 @@ let SESSION_ID = null;
 const zoneControllers = [];
 
 function setGlobalError(msg) {
-  document.getElementById("submit-error").textContent = msg || "";
+  if (msg) toastError(msg);
 }
 
 function updateSubmitState() {
-  const allReady = zoneControllers.length > 0 && zoneControllers.every((z) => z.hasLogo && z.previewObject);
+  const ready = zoneControllers.filter((z) => z.hasLogo && z.previewObject).length;
+  const total = zoneControllers.length;
+  const allReady = total > 0 && ready === total;
   document.getElementById("submit-btn").disabled = !allReady;
+  const status = document.getElementById("submit-status");
+  if (status) {
+    status.textContent = allReady
+      ? (total > 1 ? "Vos logos sont prêts ✓" : "Votre logo est prêt ✓")
+      : (total > 1 ? `${ready}/${total} logos placés`
+                    : "Importez votre logo pour continuer");
+    status.classList.toggle("ready", allReady);
+  }
 }
 
 async function boot() {
@@ -446,7 +471,15 @@ async function boot() {
     if (!startRes.ok) throw new Error(startData.error || "impossible de démarrer la commande");
     SESSION_ID = startData.order_session_id;
 
-    container.innerHTML = "";
+    container.innerHTML = `
+      <div class="order-intro">
+        <b>Comment ça marche</b>
+        <ol>
+          <li>Déposez votre logo au format SVG.</li>
+          <li>Glissez-le sur l'objet en 3D et ajustez sa taille.</li>
+          <li>Envoyez : vous recevez un numéro de commande.</li>
+        </ol>
+      </div>`;
     for (const z of product.zones) {
       const ctl = makeZoneController(z);
       zoneControllers.push(ctl);
@@ -455,25 +488,46 @@ async function boot() {
     document.getElementById("submit-bar").classList.remove("hidden");
     updateSubmitState();
   } catch (err) {
-    container.innerHTML = `<p class="hint error">${err.message}</p>`;
+    container.innerHTML = "";
+    const p = document.createElement("p");
+    p.className = "hint error";
+    p.textContent = err.message;
+    container.appendChild(p);
+    toastError(err.message);
   }
 }
 boot();
+wireCopyButtons();
+
+// --- viewer toolbar ----------------------------------------------------------
+document.getElementById("view-reset")?.addEventListener("click", () => {
+  if (lastBounds) fitCameraTo(lastBounds);
+});
+document.getElementById("view-full")?.addEventListener("click", () => {
+  const wrap = document.querySelector(".viewer-wrap");
+  if (document.fullscreenElement) document.exitFullscreen();
+  else wrap?.requestFullscreen?.().catch(() => toastError("Plein écran refusé par le navigateur."));
+});
+document.addEventListener("fullscreenchange", () => setTimeout(resize, 60));
 
 document.getElementById("submit-btn").addEventListener("click", async () => {
   setGlobalError("");
   const btn = document.getElementById("submit-btn");
   btn.disabled = true;
   btn.textContent = "Envoi en cours…";
+  setBusy(true, "Préparation de votre fichier 3D…");
   try {
     const res = await fetch(`/api/order/session/${SESSION_ID}/submit`, { method: "POST" });
     const data = await readJson(res);
     if (!res.ok) throw new Error(data.error || "échec de l'envoi");
     document.getElementById("order-code").textContent = data.order_code;
     document.getElementById("result-overlay").classList.remove("hidden");
+    document.getElementById("submit-bar").classList.add("hidden");
   } catch (err) {
     setGlobalError(err.message);
     btn.disabled = false;
     btn.textContent = "Envoyer ma commande";
+  } finally {
+    setBusy(false);
   }
 });

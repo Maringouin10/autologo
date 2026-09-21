@@ -97,6 +97,30 @@ filament/color to each.
 | `SESSION_TTL_HOURS` | `6` | how long an upload session (and its files) is kept |
 | `MAX_UPLOAD_MB` | `200` | upload size cap |
 
+## L'interface
+
+Toutes les pages partagent un même thème (`app/static/css/style.css` — tous
+les tokens de couleur/rayon/ombre sont dans son bloc `:root`) et un gabarit
+Jinja commun (`app/templates/base.html`).
+
+- **Utilisable au téléphone** : sous 860 px, l'écran de placement s'empile —
+  l'objet 3D en haut, les réglages dans une feuille défilante en dessous —
+  au lieu d'une barre latérale fixe de 320 px illisible sur mobile. La
+  galerie et l'admin passent en colonne unique.
+- **Parcours guidé** : chaque étape porte un numéro qui passe au vert une
+  fois franchie, et les étapes suivantes restent grisées tant qu'elles ne
+  sont pas accessibles.
+- **Les erreurs ne passent plus inaperçues** : elles s'affichent en toast
+  (coin de l'écran) au lieu d'une ligne rouge en bas d'un panneau défilant,
+  et les opérations longues (import, découpe booléenne, envoi de commande)
+  couvrent la vue 3D d'un voile avec un libellé disant ce qui se passe.
+- **Vue 3D** : fond dégradé, bouton *recentrer* (⟳) pour retrouver un modèle
+  qu'on a perdu en orbitant, et bouton plein écran (⛶).
+- **Admin** : les produits sont des cartes (couleur du modèle, nombre de
+  zones, pastille « à traiter » s'il y a des commandes en attente) et les
+  dates sont relatives (« il y a 2 h »), l'horodatage exact restant en
+  infobulle.
+
 ## Notes
 
 - Sessions (uploaded files + cache, for the plain tool **and** for a

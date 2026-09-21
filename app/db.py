@@ -176,6 +176,24 @@ def get_zone(zone_id: int) -> sqlite3.Row | None:
         return conn.execute("SELECT * FROM zones WHERE id = ?", (zone_id,)).fetchone()
 
 
+def count_zones_by_product() -> dict[str, int]:
+    """{product_id: number of zones} in one query — the admin product list
+    shows it for every product at once."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT product_id, COUNT(*) AS n FROM zones GROUP BY product_id").fetchall()
+    return {r["product_id"]: r["n"] for r in rows}
+
+
+def count_pending_orders_by_product() -> dict[str, int]:
+    """{product_id: number of orders still to process}, same idea."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT product_id, COUNT(*) AS n FROM orders WHERE status != 'done' "
+            "GROUP BY product_id").fetchall()
+    return {r["product_id"]: r["n"] for r in rows}
+
+
 # --- orders ------------------------------------------------------------------
 def create_order(code: str, product_id: str, output_path: str) -> int:
     with get_conn() as conn:

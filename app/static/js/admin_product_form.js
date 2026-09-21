@@ -1,22 +1,20 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-
-async function readJson(res) {
-  const text = await res.text();
-  try { return JSON.parse(text); }
-  catch { return { error: text ? text.slice(0, 200) : `erreur HTTP ${res.status}` }; }
-}
+import {
+  readJson, wireDropzone, markDropzoneFilled, enableStep, markStepDone,
+  setBusy, copyText, toastError, toastOk,
+} from "./ui.js";
 
 // --- three.js scene setup ----------------------------------------------------
 const viewerEl = document.getElementById("viewer");
 const hintEl = document.getElementById("viewer-hint");
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0f1115);
+// Transparent canvas: the viewer's CSS gradient shows through (see style.css).
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10000);
 camera.position.set(80, 80, 80);
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 viewerEl.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -69,7 +67,9 @@ const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x0a0c10, transparent:
 let modelObject = null;
 const gltfLoader = new GLTFLoader();
 
+let lastBounds = null;
 function fitCameraTo(bounds) {
+  if (bounds) lastBounds = bounds;
   const min = new THREE.Vector3(...bounds.min), max = new THREE.Vector3(...bounds.max);
   const size = new THREE.Vector3().subVectors(max, min);
   const center = new THREE.Vector3().addVectors(min, max).multiplyScalar(0.5);
@@ -117,30 +117,18 @@ const state = { sessionId: null, currentFace: null, zones: [] };
 
 function setError(msg) {
   document.getElementById("publish-error").textContent = msg || "";
-}
-function enableStep(id, on) {
-  const el = document.getElementById(id);
-  if (on) el.removeAttribute("disabled"); else el.setAttribute("disabled", "");
+  if (msg) toastError(msg);
 }
 
 const modelInfo = document.getElementById("model-info");
 
 // --- upload assembly (new product only) ---------------------------------------
-function wireDropzone(dropEl, inputEl, onFile) {
-  dropEl.addEventListener("click", () => inputEl.click());
-  inputEl.addEventListener("change", () => { if (inputEl.files[0]) onFile(inputEl.files[0]); });
-  ["dragover", "dragenter"].forEach((ev) =>
-    dropEl.addEventListener(ev, (e) => { e.preventDefault(); dropEl.classList.add("drag"); }));
-  ["dragleave", "drop"].forEach((ev) =>
-    dropEl.addEventListener(ev, (e) => { e.preventDefault(); dropEl.classList.remove("drag"); }));
-  dropEl.addEventListener("drop", (e) => { const f = e.dataTransfer.files[0]; if (f) onFile(f); });
-}
-
 const modelDrop = document.getElementById("model-drop");
 if (modelDrop) {
   wireDropzone(modelDrop, document.getElementById("model-input"), async (file) => {
     setError("");
     modelInfo.textContent = "Import en cours…";
+    setBusy(true, "Import de l'assemblage 3D…");
     const fd = new FormData();
     fd.append("file", file);
     try {
@@ -148,13 +136,16 @@ if (modelDrop) {
       const data = await readJson(res);
       if (!res.ok) throw new Error(data.error || "échec de l'import");
       state.sessionId = data.session_id;
-      document.getElementById("model-drop-label").textContent = file.name;
+      markDropzoneFilled(modelDrop, file.name, `${data.parts.length} pièce(s) détectée(s)`);
       modelInfo.textContent = `${data.parts.length} pièce(s): ${data.parts.map((p) => p.name).join(", ")}`;
       loadModelGlb(data.glb_url, data.bounds);
+      markStepDone("step-model");
       enableStep("step-zone", true);
     } catch (err) {
       modelInfo.textContent = "";
       setError(err.message);
+    } finally {
+      setBusy(false);
     }
   });
 }
@@ -177,6 +168,8 @@ async function bootEditMode() {
       state.zones.push({ ...z, marker: addZoneMarker(z.face) });
     }
     renderZonesList();
+    markStepDone("step-model");
+    markStepDone("step-zones-list", state.zones.length > 0);
     enableStep("step-zone", true);
     enableStep("step-zones-list", true);
     enableStep("step-publish", true);
@@ -258,6 +251,7 @@ function renderZonesList() {
       scene.remove(z.marker);
       state.zones.splice(i, 1);
       renderZonesList();
+      markStepDone("step-zones-list", state.zones.length > 0);
       enableStep("step-publish", state.zones.length > 0);
     });
     list.appendChild(card);
@@ -287,6 +281,8 @@ document.getElementById("add-zone-btn").addEventListener("click", () => {
   zone.marker = addZoneMarker(zone.face);
   state.zones.push(zone);
   renderZonesList();
+  markStepDone("step-zone");
+  markStepDone("step-zones-list");
   enableStep("step-zones-list", true);
   enableStep("step-publish", true);
 
@@ -303,6 +299,7 @@ document.getElementById("publish-btn").addEventListener("click", async () => {
   const originalLabel = btn.textContent;
   btn.disabled = true;
   btn.textContent = EDIT_PRODUCT_ID ? "Enregistrement…" : "Publication en cours…";
+  setBusy(true, EDIT_PRODUCT_ID ? "Enregistrement du produit…" : "Publication du produit…");
   try {
     const url = EDIT_PRODUCT_ID ? `/api/admin/products/${EDIT_PRODUCT_ID}` : "/api/admin/products";
     const res = await fetch(url, {
@@ -324,17 +321,33 @@ document.getElementById("publish-btn").addEventListener("click", async () => {
     document.getElementById("result-admin-link").href = `/admin/products/${data.product_id}`;
     document.getElementById("publish-result").classList.remove("hidden");
     btn.textContent = EDIT_PRODUCT_ID ? "Modifications enregistrées ✓" : "Produit publié ✓";
+    markStepDone("step-publish");
+    toastOk(EDIT_PRODUCT_ID ? "Modifications enregistrées."
+                             : "Produit publié — le lien client est prêt à partager.");
   } catch (err) {
     setError(err.message);
     btn.disabled = false;
     btn.textContent = originalLabel;
+  } finally {
+    setBusy(false);
   }
 });
 
-document.getElementById("result-copy-btn").addEventListener("click", () => {
+document.getElementById("result-copy-btn").addEventListener("click", (ev) => {
   const input = document.getElementById("result-url");
   input.select();
-  navigator.clipboard?.writeText(input.value);
+  copyText(input.value, ev.currentTarget);
 });
+
+// --- viewer toolbar ----------------------------------------------------------
+document.getElementById("view-reset")?.addEventListener("click", () => {
+  if (lastBounds) fitCameraTo(lastBounds);
+});
+document.getElementById("view-full")?.addEventListener("click", () => {
+  const wrap = document.querySelector(".viewer-wrap");
+  if (document.fullscreenElement) document.exitFullscreen();
+  else wrap?.requestFullscreen?.().catch(() => toastError("Plein écran refusé par le navigateur."));
+});
+document.addEventListener("fullscreenchange", () => setTimeout(resize, 60));
 
 if (EDIT_PRODUCT_ID) bootEditMode();

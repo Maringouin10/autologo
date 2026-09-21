@@ -15,7 +15,7 @@ import logging
 import os
 import shutil
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from flask import (Flask, abort, flash, jsonify, redirect, render_template,
                     request, send_file, session, url_for)
@@ -46,6 +46,65 @@ store.start_cleanup_thread()
 orders.start_cleanup_thread()
 if not config.DASHBOARD_PASSWORD:
     log.warning("DASHBOARD_PASSWORD is empty — login is disabled until you set it!")
+
+
+# --- template helpers ----------------------------------------------------------
+_FR_MONTHS = ["janv.", "févr.", "mars", "avril", "mai", "juin", "juil.",
+              "août", "sept.", "oct.", "nov.", "déc."]
+
+DEFAULT_SWATCH = "#8fa6c9"
+
+
+def _parse_iso(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+@app.template_filter("fr_datetime")
+def fr_datetime(value: str) -> str:
+    """'2026-09-21T14:32:05+00:00' -> '21 sept. 2026 à 14:32' (UTC)."""
+    dt = _parse_iso(value)
+    if dt is None:
+        return str(value or "")
+    return f"{dt.day} {_FR_MONTHS[dt.month - 1]} {dt.year} à {dt:%H:%M}"
+
+
+@app.template_filter("fr_ago")
+def fr_ago(value: str) -> str:
+    """Relative age, so a list of orders can be scanned without doing date
+    arithmetic in your head. Falls back to the absolute date past a week."""
+    dt = _parse_iso(value)
+    if dt is None:
+        return str(value or "")
+    seconds = (datetime.now(timezone.utc) - dt).total_seconds()
+    if seconds < 90:
+        return "à l'instant"
+    if seconds < 3600:
+        return f"il y a {int(seconds // 60)} min"
+    if seconds < 86400:
+        hours = int(seconds // 3600)
+        return f"il y a {hours} h" if hours > 1 else "il y a 1 h"
+    days = int(seconds // 86400)
+    if days == 1:
+        return "hier"
+    if days < 7:
+        return f"il y a {days} jours"
+    return fr_datetime(value).split(" à ")[0]
+
+
+def _product_swatch(product) -> str:
+    """The product's dominant part color (read from its 3MF) as a CSS color,
+    used for the gallery/admin card thumbnails."""
+    try:
+        colors = json.loads(product["colors_json"] or "{}")
+    except (ValueError, TypeError):
+        return DEFAULT_SWATCH
+    if not colors:
+        return DEFAULT_SWATCH
+    return "#{:02x}{:02x}{:02x}".format(*next(iter(colors.values()))[:3])
 
 
 def login_required(view):
@@ -111,11 +170,8 @@ def logout():
 # --- public gallery --------------------------------------------------------------
 @app.route("/")
 def gallery():
-    products = []
-    for p in db.list_products():
-        colors = json.loads(p["colors_json"] or "{}")
-        swatch = "#{:02x}{:02x}{:02x}".format(*next(iter(colors.values()))) if colors else "#8fa6c9"
-        products.append({"id": p["id"], "name": p["name"], "swatch": swatch})
+    products = [{"id": p["id"], "name": p["name"], "swatch": _product_swatch(p)}
+                for p in db.list_products()]
     return render_template("gallery.html", products=products)
 
 
@@ -129,7 +185,19 @@ def tool():
 @app.route("/admin")
 @login_required
 def admin_home():
-    return render_template("admin_products.html", products=db.list_products())
+    zone_counts = db.count_zones_by_product()
+    pending = db.count_pending_orders_by_product()
+    products = [{
+        "id": p["id"],
+        "name": p["name"],
+        "created_at": p["created_at"],
+        "export_mode": p["export_mode"],
+        "swatch": _product_swatch(p),
+        "zone_count": zone_counts.get(p["id"], 0),
+        "pending_orders": pending.get(p["id"], 0),
+    } for p in db.list_products()]
+    return render_template("admin_products.html", products=products,
+                            pending_total=sum(pending.values()))
 
 
 @app.route("/admin/products/new")
@@ -167,6 +235,7 @@ def admin_product_detail(product_id):
     return render_template(
         "admin_product_detail.html", product=product,
         zones=db.list_zones(product_id), orders=db.list_orders(product_id),
+        swatch=_product_swatch(product),
         customer_url=url_for("customer_order", product_id=product_id, _external=True),
     )
 

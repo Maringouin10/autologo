@@ -1,20 +1,19 @@
-<!doctype html>
-<html lang="fr">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AutoLogo — connexion</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-</head>
-<body class="login-body">
-  <form class="login-card" method="post">
-    <h1>🏷️ AutoLogo</h1>
-    <p class="muted">Placez un logo sur un modèle 3D et exportez-le en 3MF.</p>
-    {% with messages = get_flashed_messages() %}
-      {% if messages %}<p class="error">{{ messages[0] }}</p>{% endif %}
-    {% endwith %}
-    <input type="password" name="password" placeholder="Mot de passe" autofocus required>
-    <button type="submit">Entrer</button>
-  </form>
-</body>
-</html>
+{% extends "base.html" %}
+{% block title %}AutoLogo — Connexion{% endblock %}
+{% block body_class %}login-body{% endblock %}
+
+{% block content %}
+<form class="login-card" method="post">
+  <span class="brand"><span class="brand-mark">🏷️</span> AutoLogo</span>
+  <h1>Espace vendeur</h1>
+  <p class="muted">Gérez vos produits personnalisables et vos commandes.</p>
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}<p class="error">⚠ {{ messages[0] }}</p>{% endif %}
+  {% endwith %}
+  <div class="field" style="margin:0">
+    <label for="password">Mot de passe</label>
+    <input id="password" type="password" name="password" placeholder="••••••••" autofocus required>
+  </div>
+  <button type="submit" class="btn btn-primary btn-block btn-lg">Entrer</button>
+</form>
+{% endblock %}

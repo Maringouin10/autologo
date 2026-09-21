@@ -1,30 +1,40 @@
-<!doctype html>
-<html lang="fr">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AutoLogo — Nos produits</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-</head>
-<body class="admin-body">
-  <header class="topbar">
-    <h1>🏷️ Nos produits personnalisables</h1>
-    <span class="muted">Choisissez un produit, placez votre logo</span>
-  </header>
+{% extends "base.html" %}
+{% block title %}Nos produits personnalisables{% endblock %}
+{% block body_class %}admin-body{% endblock %}
 
-  <main class="admin-main">
-    {% if not products %}
-      <p class="hint">Aucun produit disponible pour l'instant.</p>
-    {% else %}
-      <div class="gallery-grid">
-        {% for p in products %}
-        <a class="gallery-card" href="{{ url_for('customer_order', product_id=p['id']) }}">
-          <div class="gallery-swatch" style="background:{{ p['swatch'] }}"></div>
-          <div class="gallery-name">{{ p['name'] }}</div>
-        </a>
-        {% endfor %}
-      </div>
-    {% endif %}
-  </main>
-</body>
-</html>
+{% block header %}
+<header class="topbar">
+  <a class="brand" href="{{ url_for('gallery') }}"><span class="brand-mark">🏷️</span> <span>AutoLogo</span></a>
+  <span class="topbar-sub">Impression 3D personnalisée</span>
+</header>
+{% endblock %}
+
+{% block content %}
+<main class="admin-main">
+  <section class="gallery-hero">
+    <h1>Nos produits personnalisables</h1>
+    <p>Choisissez un produit, déposez votre logo, ajustez-le sur l'objet en 3D
+       et envoyez votre commande — sans créer de compte.</p>
+  </section>
+
+  {% if not products %}
+    <div class="empty">
+      <span class="empty-icon">📦</span>
+      <h3>Aucun produit disponible</h3>
+      <p>La boutique est encore vide — revenez bientôt !</p>
+    </div>
+  {% else %}
+    <div class="gallery-grid">
+      {% for p in products %}
+      <a class="gallery-card" href="{{ url_for('customer_order', product_id=p['id']) }}">
+        <div class="gallery-swatch" style="background:{{ p['swatch'] }}"></div>
+        <div class="gallery-body">
+          <span class="gallery-name">{{ p['name'] }}</span>
+          <span class="gallery-cta">Personnaliser →</span>
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+  {% endif %}
+</main>
+{% endblock %}

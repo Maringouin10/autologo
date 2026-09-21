@@ -1,0 +1,24 @@
+<!doctype html>
+{#
+  Shared shell for every page. A page fills in:
+    title / head      — <title> text and extra <head> tags (e.g. the importmap)
+    body_class / body_attrs
+    header            — the top bar
+    content / scripts
+#}
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0e14">
+  <title>{% block title %}AutoLogo{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%235b9dff'/><text y='70' x='50' text-anchor='middle' font-size='58'>🏷️</text></svg>">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body class="{% block body_class %}{% endblock %}"{% block body_attrs %}{% endblock %}>
+  {% block header %}{% endblock %}
+  {% block content %}{% endblock %}
+  {% block scripts %}{% endblock %}
+</body>
+</html>

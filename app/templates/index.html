@@ -1,134 +1,155 @@
-<!doctype html>
-<html lang="fr">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AutoLogo</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
-    }
+{% extends "base.html" %}
+{% block title %}AutoLogo — Outil{% endblock %}
+
+{% block head %}
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
   }
-  </script>
-</head>
-<body>
-  <header class="topbar">
-    <h1>🏷️ AutoLogo</h1>
-    <span class="muted">Logo SVG → face plate → export 3MF (objets séparés, prêt multi-couleur)</span>
+}
+</script>
+{% endblock %}
+
+{% block header %}
+<header class="topbar">
+  <a class="brand" href="{{ url_for('admin_home') }}"><span class="brand-mark">🏷️</span> <span>AutoLogo</span></a>
+  <span class="topbar-sub">Outil simple — un modèle, un logo, un 3MF</span>
+  <nav class="topbar-actions">
+    <a class="nav-link" href="{{ url_for('admin_home') }}">← Mes produits</a>
     <a class="logout" href="{{ url_for('logout') }}">Déconnexion</a>
-  </header>
+  </nav>
+</header>
+{% endblock %}
 
-  <main class="layout">
-    <aside class="panel">
-      <section class="step" id="step-model">
-        <h2>1. Modèle 3D</h2>
-        <label class="dropzone" id="model-drop">
-          <input type="file" id="model-input" accept=".stl,.obj,.ply,.3mf,.off" hidden>
-          <span id="model-drop-label">STL / OBJ / 3MF / PLY — cliquez ou déposez</span>
+{% block content %}
+<main class="layout">
+  <aside class="panel">
+    <section class="step" id="step-model">
+      <h2><span class="step-num"><span class="num">1</span></span> Modèle 3D</h2>
+      <label class="dropzone" id="model-drop">
+        <input type="file" id="model-input" accept=".stl,.obj,.ply,.3mf,.off" hidden>
+        <span class="dz-icon">📦</span>
+        <span class="dz-main">Cliquez ou déposez votre modèle</span>
+        <span class="dz-sub">STL · OBJ · 3MF · PLY</span>
+      </label>
+      <p class="hint" id="model-info"></p>
+    </section>
+
+    <section class="step" id="step-logo" disabled>
+      <h2><span class="step-num"><span class="num">2</span></span> Logo</h2>
+      <label class="dropzone" id="logo-drop">
+        <input type="file" id="logo-input" accept=".svg" hidden>
+        <span class="dz-icon">🎨</span>
+        <span class="dz-main">Cliquez ou déposez votre logo</span>
+        <span class="dz-sub">Fichier .svg — jusqu'à 3 couleurs</span>
+      </label>
+      <p class="hint" id="logo-info"></p>
+    </section>
+
+    <section class="step" id="step-logo-edit" disabled>
+      <h2><span class="step-num"><span class="num">3</span></span> Retoucher le logo</h2>
+      <p class="hint">
+        Décochez une forme pour l'exclure — pratique pour un fond, un élément
+        en trop, ou l'intérieur d'un « O » ressorti en pièce pleine.
+      </p>
+      <div id="shape-list" class="shape-list"></div>
+      <div class="flip-row">
+        <button type="button" class="toggle-btn" id="flip-h-btn">⇋ Miroir H</button>
+        <button type="button" class="toggle-btn" id="flip-v-btn">⇵ Miroir V</button>
+      </div>
+      <div class="combined-preview" id="combined-preview-wrap">
+        <svg id="combined-preview"></svg>
+      </div>
+    </section>
+
+    <section class="step" id="step-face" disabled>
+      <h2><span class="step-num"><span class="num">4</span></span> Face à marquer</h2>
+      <p class="hint">Cliquez sur une face <b>plate</b> du modèle, dans la vue 3D.</p>
+      <p class="hint" id="face-info">Aucune face sélectionnée.</p>
+    </section>
+
+    <section class="step" id="step-placement" disabled>
+      <h2><span class="step-num"><span class="num">5</span></span> Placement</h2>
+      <p class="hint">
+        <b>Glissez le logo</b> directement dans la vue 3D pour le positionner —
+        les curseurs suivent le geste et restent réglables au mm près.
+      </p>
+      <button type="button" class="btn btn-ghost btn-block" id="fit-btn" style="margin-bottom:14px">
+        ⤢ Ajuster à la plaque (max)
+      </button>
+      <div class="field">
+        <label for="width">Largeur <span id="width-val" class="val"></span></label>
+        <input type="range" id="width" min="1" max="500" step="0.5">
+      </div>
+      <div class="field">
+        <label for="rot">Rotation <span id="rot-val" class="val"></span></label>
+        <input type="range" id="rot" min="0" max="360" step="1" value="0">
+      </div>
+      <div class="field">
+        <label for="dx">Décalage horizontal <span id="dx-val" class="val"></span></label>
+        <input type="range" id="dx" min="-100" max="100" step="0.2" value="0">
+      </div>
+      <div class="field">
+        <label for="dy">Décalage vertical <span id="dy-val" class="val"></span></label>
+        <input type="range" id="dy" min="-100" max="100" step="0.2" value="0">
+      </div>
+    </section>
+
+    <section class="step" id="step-mode" disabled>
+      <h2><span class="step-num"><span class="num">6</span></span> Mode d'impression</h2>
+      <div class="mode-choice">
+        <label class="opt">
+          <input type="radio" name="mode" value="emboss" checked>
+          <span class="opt-body">
+            <b>Relief</b>
+            <small>Le logo est posé en saillie sur la surface. Fonctionne sur n'importe quel modèle.</small>
+          </span>
         </label>
-        <p class="hint" id="model-info"></p>
-      </section>
-
-      <section class="step" id="step-logo" disabled>
-        <h2>2. Logo (SVG)</h2>
-        <label class="dropzone" id="logo-drop">
-          <input type="file" id="logo-input" accept=".svg" hidden>
-          <span id="logo-drop-label">Fichier .svg — cliquez ou déposez</span>
+        <label class="opt">
+          <input type="radio" name="mode" value="deboss">
+          <span class="opt-body">
+            <b>Gravé</b>
+            <small>Le logo est creusé, avec une pièce qui comble le creux. Demande un modèle étanche.</small>
+          </span>
         </label>
-        <p class="hint" id="logo-info"></p>
-      </section>
+      </div>
+      <div class="field">
+        <label for="depth">Profondeur <span id="depth-val" class="val"></span></label>
+        <input type="range" id="depth" min="0.2" max="10" step="0.1" value="1.5">
+      </div>
+      <div class="field" id="field-sink">
+        <label for="sink">Ancrage dans le modèle <span id="sink-val" class="val"></span></label>
+        <input type="range" id="sink" min="0" max="3" step="0.05" value="0.3">
+      </div>
+      <div class="field hidden" id="field-fill">
+        <label for="fill">Saillie de la pièce de remplissage <span id="fill-val" class="val"></span></label>
+        <input type="range" id="fill" min="0" max="2" step="0.05" value="0">
+      </div>
+    </section>
 
-      <section class="step" id="step-logo-edit" disabled>
-        <h2>3. Modifier le logo</h2>
-        <p class="hint">
-          Décochez une forme pour l'exclure (utile pour un fond, un objet en
-          trop, ou un trou mal détecté — comme l'intérieur d'un "O" ressorti
-          en pièce pleine au lieu d'un creux).
-        </p>
-        <div id="shape-list" class="shape-list"></div>
-        <div class="flip-row">
-          <button type="button" class="toggle-btn" id="flip-h-btn">⇋ Miroir horizontal</button>
-          <button type="button" class="toggle-btn" id="flip-v-btn">⇵ Miroir vertical</button>
-        </div>
-        <div class="combined-preview" id="combined-preview-wrap">
-          <svg id="combined-preview"></svg>
-        </div>
-      </section>
+    <section class="step" id="step-export" disabled>
+      <button id="export-btn" class="btn btn-primary btn-block btn-lg">⬇ Exporter en 3MF</button>
+      <p class="hint" style="margin-top:10px">
+        Le 3MF contient le modèle et le logo en objets séparés : assignez un
+        filament à chacun dans votre trancheur.
+      </p>
+      <p class="hint error" id="export-error"></p>
+    </section>
+  </aside>
 
-      <section class="step" id="step-face" disabled>
-        <h2>4. Face</h2>
-        <p class="hint">Cliquez sur une face <b>plate</b> du modèle, dans la vue 3D.</p>
-        <p class="hint" id="face-info">Aucune face sélectionnée.</p>
-      </section>
-
-      <section class="step" id="step-placement" disabled>
-        <h2>5. Placement</h2>
-        <p class="hint">
-          <b>Glissez le logo</b> (la forme verte) directement dans la vue 3D
-          pour le positionner — les décalages ci-dessous suivent le geste et
-          restent modifiables à la main pour un réglage au mm près.
-        </p>
-        <button type="button" id="fit-btn">⤢ Ajuster à la plaque (max)</button>
-        <div class="field">
-          <label>Largeur (mm) <span id="width-val"></span></label>
-          <input type="range" id="width" min="1" max="500" step="0.5">
-        </div>
-        <div class="field">
-          <label>Rotation (°) <span id="rot-val"></span></label>
-          <input type="range" id="rot" min="0" max="360" step="1" value="0">
-        </div>
-        <div class="field">
-          <label>Décalage X (mm) <span id="dx-val"></span></label>
-          <input type="range" id="dx" min="-100" max="100" step="0.2" value="0">
-        </div>
-        <div class="field">
-          <label>Décalage Y (mm) <span id="dy-val"></span></label>
-          <input type="range" id="dy" min="-100" max="100" step="0.2" value="0">
-        </div>
-      </section>
-
-      <section class="step" id="step-mode" disabled>
-        <h2>6. Mode d'impression</h2>
-        <div class="mode-choice">
-          <label><input type="radio" name="mode" value="emboss" checked> Relief (logo en saillie)</label>
-          <label><input type="radio" name="mode" value="deboss"> Gravé (logo creusé + pièce de remplissage)</label>
-        </div>
-        <div class="field">
-          <label>Profondeur (mm) <span id="depth-val"></span></label>
-          <input type="range" id="depth" min="0.2" max="10" step="0.1" value="1.5">
-        </div>
-        <div class="field" id="field-sink">
-          <label>Ancrage dans le modèle (mm) <span id="sink-val"></span></label>
-          <input type="range" id="sink" min="0" max="3" step="0.05" value="0.3">
-        </div>
-        <div class="field hidden" id="field-fill">
-          <label>Saillie de la pièce de remplissage (mm) <span id="fill-val"></span></label>
-          <input type="range" id="fill" min="0" max="2" step="0.05" value="0">
-        </div>
-        <p class="hint">
-          <b>Relief</b> : le logo est un objet séparé posé sur la surface —
-          robuste, fonctionne sur n'importe quel modèle.<br>
-          <b>Gravé</b> : le logo est creusé dans le modèle, avec une pièce qui
-          comble exactement le creux — nécessite un modèle étanche
-          ("watertight").
-        </p>
-      </section>
-
-      <section class="step" id="step-export" disabled>
-        <button id="export-btn">⬇ Exporter en 3MF</button>
-        <p class="hint error" id="export-error"></p>
-      </section>
-    </aside>
-
-    <div class="viewer-wrap">
-      <div id="viewer"></div>
-      <div id="viewer-hint" class="viewer-hint">Importez un modèle 3D pour commencer.</div>
+  <div class="viewer-wrap">
+    <div id="viewer"></div>
+    <div id="viewer-hint" class="viewer-hint">Importez un modèle 3D pour commencer.</div>
+    <div class="viewer-tools">
+      <button type="button" class="icon-btn" id="view-reset" title="Recentrer la vue" aria-label="Recentrer la vue">⟳</button>
+      <button type="button" class="icon-btn" id="view-full" title="Plein écran" aria-label="Plein écran">⛶</button>
     </div>
-  </main>
+  </div>
+</main>
+{% endblock %}
 
-  <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
-</body>
-</html>
+{% block scripts %}
+<script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% endblock %}

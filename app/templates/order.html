@@ -1,50 +1,66 @@
-<!doctype html>
-<html lang="fr">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ product['name'] }} — personnalisation</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
-    }
+{% extends "base.html" %}
+{% block title %}{{ product['name'] }} — personnalisation{% endblock %}
+{% block body_class %}has-submit-bar{% endblock %}
+{% block body_attrs %} data-product-id="{{ product['id'] }}"{% endblock %}
+
+{% block head %}
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
   }
-  </script>
-</head>
-<body data-product-id="{{ product['id'] }}">
-  <header class="topbar">
-    <h1>🏷️ {{ product['name'] }}</h1>
-    <span class="muted">Placez votre logo, puis envoyez votre commande</span>
-  </header>
+}
+</script>
+{% endblock %}
 
-  <main class="layout">
-    <aside class="panel" id="zones-container">
-      <p class="hint">Chargement…</p>
-    </aside>
+{% block header %}
+<header class="topbar">
+  <a class="brand" href="{{ url_for('gallery') }}"><span class="brand-mark">🏷️</span> <span>AutoLogo</span></a>
+  <h1>{{ product['name'] }}</h1>
+  <span class="topbar-sub">Personnalisation</span>
+  <nav class="topbar-actions">
+    <a class="nav-link" href="{{ url_for('gallery') }}">← Boutique</a>
+  </nav>
+</header>
+{% endblock %}
 
-    <div class="viewer-wrap">
-      <div id="viewer"></div>
-      <div id="viewer-hint" class="viewer-hint">Chargement du modèle…</div>
-    </div>
-  </main>
+{% block content %}
+<main class="layout">
+  <aside class="panel" id="zones-container">
+    <p class="hint">Chargement…</p>
+  </aside>
 
-  <div id="submit-bar" class="submit-bar hidden">
-    <p class="hint error" id="submit-error"></p>
-    <button type="button" id="submit-btn">Envoyer ma commande</button>
-  </div>
-
-  <div id="result-overlay" class="result-overlay hidden">
-    <div class="result-card">
-      <h2>Commande envoyée ✓</h2>
-      <p>Votre numéro de commande :</p>
-      <div class="order-code" id="order-code"></div>
-      <p class="hint">Reportez ce numéro dans le formulaire de commande pour finaliser votre achat.</p>
+  <div class="viewer-wrap">
+    <div id="viewer"></div>
+    <div id="viewer-hint" class="viewer-hint">Chargement du modèle…</div>
+    <div class="viewer-tools">
+      <button type="button" class="icon-btn" id="view-reset" title="Recentrer la vue" aria-label="Recentrer la vue">⟳</button>
+      <button type="button" class="icon-btn" id="view-full" title="Plein écran" aria-label="Plein écran">⛶</button>
     </div>
   </div>
+</main>
 
-  <script type="module" src="{{ url_for('static', filename='js/order.js') }}"></script>
-</body>
-</html>
+<div id="submit-bar" class="submit-bar hidden">
+  <span class="submit-status" id="submit-status"></span>
+  <button type="button" id="submit-btn" class="btn btn-primary btn-lg">Envoyer ma commande</button>
+</div>
+
+<div id="result-overlay" class="result-overlay hidden">
+  <div class="result-card">
+    <div class="result-icon">✓</div>
+    <h2>Commande envoyée</h2>
+    <p>Votre numéro de commande :</p>
+    <div class="order-code" id="order-code"></div>
+    <button type="button" class="btn btn-soft btn-sm" data-copy="#order-code">Copier le numéro</button>
+    <p class="hint" style="margin-top:14px">
+      Reportez ce numéro dans le formulaire de commande pour finaliser votre achat.
+    </p>
+    <a class="btn btn-ghost btn-block" style="margin-top:16px" href="{{ url_for('gallery') }}">← Retour à la boutique</a>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module" src="{{ url_for('static', filename='js/order.js') }}"></script>
+{% endblock %}

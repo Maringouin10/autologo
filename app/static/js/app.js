@@ -1,31 +1,23 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-
-// The backend always answers JSON, even on error (see main.py's error
-// handler) — but if something ever slips through (a proxy's own error
-// page, a network failure), don't let `res.json()`'s SyntaxError surface
-// as a cryptic "Unexpected token '<'"; show a real message instead.
-async function readJson(res) {
-  const text = await res.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { error: text ? text.slice(0, 200) : `erreur HTTP ${res.status}` };
-  }
-}
+import {
+  readJson, wireDropzone, markDropzoneFilled, enableStep, markStepDone,
+  setBusy, toastError, toastOk,
+} from "./ui.js";
 
 // --- three.js scene setup ----------------------------------------------------
 const viewerEl = document.getElementById("viewer");
 const hintEl = document.getElementById("viewer-hint");
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0f1115);
+// No opaque scene background: the canvas is transparent so the viewer's CSS
+// gradient shows through, which reads as depth instead of a flat block.
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10000);
 camera.position.set(80, 80, 80);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 viewerEl.appendChild(renderer.domElement);
 
@@ -100,7 +92,9 @@ let modelEdges = null;    // THREE.LineSegments outlining modelObject's facets
 let previewObject = null; // THREE.Mesh of the live logo placement preview
 const gltfLoader = new GLTFLoader();
 
+let lastBounds = null;
 function fitCameraTo(bounds) {
+  if (bounds) lastBounds = bounds;
   const min = new THREE.Vector3(...bounds.min);
   const max = new THREE.Vector3(...bounds.max);
   const size = new THREE.Vector3().subVectors(max, min);
@@ -163,11 +157,7 @@ const state = {
 
 function setError(msg) {
   document.getElementById("export-error").textContent = msg || "";
-}
-
-function enableStep(id, on) {
-  const el = document.getElementById(id);
-  if (on) el.removeAttribute("disabled"); else el.setAttribute("disabled", "");
+  if (msg) toastError(msg);
 }
 
 // --- upload: model --------------------------------------------------------------
@@ -175,22 +165,10 @@ const modelInput = document.getElementById("model-input");
 const modelDrop = document.getElementById("model-drop");
 const modelInfo = document.getElementById("model-info");
 
-function wireDropzone(dropEl, inputEl, onFile) {
-  dropEl.addEventListener("click", () => inputEl.click());
-  inputEl.addEventListener("change", () => { if (inputEl.files[0]) onFile(inputEl.files[0]); });
-  ["dragover", "dragenter"].forEach((ev) =>
-    dropEl.addEventListener(ev, (e) => { e.preventDefault(); dropEl.classList.add("drag"); }));
-  ["dragleave", "drop"].forEach((ev) =>
-    dropEl.addEventListener(ev, (e) => { e.preventDefault(); dropEl.classList.remove("drag"); }));
-  dropEl.addEventListener("drop", (e) => {
-    const f = e.dataTransfer.files[0];
-    if (f) onFile(f);
-  });
-}
-
 wireDropzone(modelDrop, modelInput, async (file) => {
   setError("");
   modelInfo.textContent = "Import en cours…";
+  setBusy(true, "Import du modèle 3D…");
   const fd = new FormData();
   fd.append("file", file);
   try {
@@ -198,13 +176,16 @@ wireDropzone(modelDrop, modelInput, async (file) => {
     const data = await readJson(res);
     if (!res.ok) throw new Error(data.error || "échec de l'import");
     state.sessionId = data.session_id;
-    document.getElementById("model-drop-label").textContent = file.name;
+    markDropzoneFilled(modelDrop, file.name, `${data.face_count} faces · ~${data.scale_mm} mm`);
     modelInfo.textContent = `${data.face_count} faces, échelle ~${data.scale_mm} mm`;
     loadModelGlb(data.glb_url, data.bounds);
+    markStepDone("step-model");
     enableStep("step-logo", true);
   } catch (err) {
     modelInfo.textContent = "";
     setError(err.message);
+  } finally {
+    setBusy(false);
   }
 });
 
@@ -217,6 +198,7 @@ wireDropzone(logoDrop, logoInput, async (file) => {
   if (!state.sessionId) { setError("importez d'abord un modèle 3D."); return; }
   setError("");
   logoInfo.textContent = "Import en cours…";
+  setBusy(true, "Lecture du logo SVG…");
   const fd = new FormData();
   fd.append("file", file);
   fd.append("session_id", state.sessionId);
@@ -224,7 +206,7 @@ wireDropzone(logoDrop, logoInput, async (file) => {
     const res = await fetch("/api/upload/logo", { method: "POST", body: fd });
     const data = await readJson(res);
     if (!res.ok) throw new Error(data.error || "échec de l'import");
-    document.getElementById("logo-drop-label").textContent = file.name;
+    markDropzoneFilled(logoDrop, file.name, `${data.shapes.length} forme(s) détectée(s)`);
     logoInfo.textContent = `${data.logo_bounds.width} × ${data.logo_bounds.height} (unités SVG)`;
     state.hasLogo = true;
     state.logoShapes = data.shapes;
@@ -235,11 +217,14 @@ wireDropzone(logoDrop, logoInput, async (file) => {
     document.getElementById("flip-v-btn").classList.remove("active");
     renderShapeList();
     renderCombinedPreview();
+    markStepDone("step-logo");
     enableStep("step-logo-edit", true);
     enableStep("step-face", true);
   } catch (err) {
     logoInfo.textContent = "";
     setError(err.message);
+  } finally {
+    setBusy(false);
   }
 });
 
@@ -553,6 +538,8 @@ renderer.domElement.addEventListener("click", async (ev) => {
     widthSlider.value = data.suggested_width_mm;
     sliders.dx.min = -span; sliders.dx.max = span; sliders.dx.value = 0;
     sliders.dy.min = -span; sliders.dy.max = span; sliders.dy.value = 0;
+    markStepDone("step-logo-edit");
+    markStepDone("step-face");
     enableStep("step-placement", true);
     enableStep("step-mode", true);
     enableStep("step-export", true);
@@ -590,6 +577,7 @@ document.getElementById("export-btn").addEventListener("click", async () => {
     sink_mm: parseFloat(sliders.sink.value),
     fill_extra_mm: parseFloat(sliders.fill.value),
   };
+  setBusy(true, mode === "deboss" ? "Découpe booléenne en cours…" : "Génération du 3MF…");
   try {
     const res = await fetch(`/api/session/${state.sessionId}/export`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -608,10 +596,25 @@ document.getElementById("export-btn").addEventListener("click", async () => {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+    toastOk("3MF exporté — ouvrez-le dans votre trancheur.");
   } catch (err) {
     setError(err.message);
   } finally {
+    setBusy(false);
     btn.disabled = false;
     btn.textContent = "⬇ Exporter en 3MF";
   }
 });
+
+// --- viewer toolbar ----------------------------------------------------------
+// Orbiting past the model (easy to do on a trackpad) used to mean reloading
+// the page to find it again.
+document.getElementById("view-reset")?.addEventListener("click", () => {
+  if (lastBounds) fitCameraTo(lastBounds);
+});
+document.getElementById("view-full")?.addEventListener("click", () => {
+  const wrap = document.querySelector(".viewer-wrap");
+  if (document.fullscreenElement) document.exitFullscreen();
+  else wrap?.requestFullscreen?.().catch(() => toastError("Plein écran refusé par le navigateur."));
+});
+document.addEventListener("fullscreenchange", () => setTimeout(resize, 60));
