@@ -507,13 +507,37 @@ def _expand_use(el, fill, css, out, matrix, ids, depth):
     _collect_svg_shapes(clone, fill, css, out, placed, ids, depth + 1)
 
 
+def _repaired_polygons(polygon) -> list:
+    """Valid, printable pieces for one polygon.
+
+    An outline that crosses itself (a stroke converted to a path, an
+    "optimized" export) is invalid, and used to be dropped silently — the
+    piece simply went missing from the logo. buffer(0) is shapely's own way
+    of rebuilding such a shape into valid geometry; it may come back as
+    several pieces, which is exactly what a self-crossing outline means."""
+    if polygon is None:
+        return []
+    if _is_usable_polygon(polygon):
+        return [polygon]
+    try:
+        fixed = polygon.buffer(0)
+    except Exception:
+        return []
+    parts = getattr(fixed, "geoms", [fixed])
+    return [p for p in parts
+            if getattr(p, "geom_type", "") == "Polygon" and _is_usable_polygon(p)]
+
+
 def _polygons_of(path2d) -> list:
     """polygons_full with the documented fallbacks — see load_logo."""
     try:
         polygons = list(path2d.polygons_full)
     except Exception:
         polygons = list(path2d.polygons_closed)
-    return [p for p in polygons if p is not None and _is_usable_polygon(p)]
+    out = []
+    for p in polygons:
+        out.extend(_repaired_polygons(p))
+    return out
 
 
 def _hex_to_rgb(h: str) -> tuple[int, int, int]:
@@ -964,7 +988,53 @@ def _signed_area(pts: np.ndarray) -> float:
     return 0.5 * float(np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
 
 
+def _unpinch(polygon):
+    """Pull a hole a hair away from whatever it touches.
+
+    A hole that meets the outline (or another hole) at a single point leaves
+    the material zero-width there: the extruded solid pinches to nothing
+    along a vertical edge, four faces meet on it, and no amount of repair
+    makes that a volume — the boolean engine simply refuses it. It is not
+    printable at zero width either, so shrinking the holes by a hair both
+    fixes the geometry and matches what the printer could actually do. The
+    offset is relative, ~0.01% of the shape, far below any nozzle."""
+    if not polygon.interiors:
+        return polygon
+    eps = max(math.sqrt(max(polygon.area, 1e-12)) * 1e-4, 1e-9)
+    holes = []
+    for ring in polygon.interiors:
+        try:
+            shrunk = ShapelyPolygon(ring).buffer(-eps, join_style=2)
+        except Exception:
+            continue
+        for part in getattr(shrunk, "geoms", [shrunk]):
+            if getattr(part, "geom_type", "") == "Polygon" and not part.is_empty:
+                holes.append(part)
+    try:
+        outer = ShapelyPolygon(polygon.exterior)
+        result = outer.difference(unary_union(holes)) if holes else outer
+    except Exception:
+        return polygon
+    for part in sorted(getattr(result, "geoms", [result]),
+                        key=lambda g: getattr(g, "area", 0.0), reverse=True):
+        if getattr(part, "geom_type", "") == "Polygon" and _is_usable_polygon(part):
+            return part
+    return polygon
+
+
 def _extrude_polygon(polygon, height: float) -> trimesh.Trimesh:
+    """Extrude one polygon, retrying once on a shape that pinches itself."""
+    mesh = _extrude_simple(polygon, height)
+    if mesh.is_volume:
+        return mesh
+    unpinched = _unpinch(polygon)
+    if unpinched is polygon:
+        return mesh
+    retried = _extrude_simple(unpinched, height)
+    return retried if retried.is_volume else mesh
+
+
+def _extrude_simple(polygon, height: float) -> trimesh.Trimesh:
     """Extrude a single (possibly holed) shapely polygon into a watertight
     solid. Hand-rolled instead of trimesh's own Path2D.extrude(): that path
     reliably produced non-manifold seams (duplicate/degenerate wall
@@ -985,6 +1055,8 @@ def _extrude_polygon(polygon, height: float) -> trimesh.Trimesh:
     verts2d = np.vstack(rings)
     ring_ends = np.cumsum([len(r) for r in rings]).astype(np.uint32)
     cap_faces = earcut.triangulate_float64(verts2d, ring_ends).reshape(-1, 3).astype(np.int64)
+    if len(cap_faces) == 0:
+        raise MeshError("une forme du logo n'a pas pu être triangulée")
 
     n = len(verts2d)
     vertices = np.vstack([
@@ -994,18 +1066,27 @@ def _extrude_polygon(polygon, height: float) -> trimesh.Trimesh:
     bottom_faces = cap_faces[:, ::-1]     # facing -z
     top_faces = cap_faces + n              # facing +z
 
-    wall_faces = []
-    offset = 0
-    for ring in rings:
-        m = len(ring)
-        for i in range(m):
-            a = offset + i
-            b = offset + (i + 1) % m
-            wall_faces.append((a, b, b + n))
-            wall_faces.append((a, b + n, a + n))
-        offset += m
+    # Walls follow the CAP's own boundary, not the input rings. Those two
+    # disagree the moment a hole touches the outline — a counter that kisses
+    # the edge of a letter, say: the triangulation then splits the outer edge
+    # at the contact point while a ring-based wall spans it in one piece, and
+    # every such T-junction left a pair of open edges. The mesh came out
+    # non-watertight, no repair could close it, and the boolean cut refused
+    # the whole job with "Not all meshes are volumes!".
+    # Boundary edges are the ones used by exactly one cap triangle; taking
+    # them with the triangle's own winding keeps the outward orientation
+    # (exterior counter-clockwise, holes clockwise) for free.
+    directed = np.vstack([cap_faces[:, [0, 1]], cap_faces[:, [1, 2]], cap_faces[:, [2, 0]]])
+    keys = np.sort(directed, axis=1)
+    _, inverse, counts = np.unique(keys, axis=0, return_inverse=True, return_counts=True)
+    boundary = directed[counts[inverse] == 1]
 
-    faces = np.vstack([bottom_faces, top_faces, np.array(wall_faces, dtype=np.int64)])
+    wall_faces = np.empty((len(boundary) * 2, 3), dtype=np.int64)
+    a, b = boundary[:, 0], boundary[:, 1]
+    wall_faces[0::2] = np.column_stack([a, b, b + n])
+    wall_faces[1::2] = np.column_stack([a, b + n, a + n])
+
+    faces = np.vstack([bottom_faces, top_faces, wall_faces])
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
 
@@ -1227,14 +1308,32 @@ def deboss(base: trimesh.Trimesh, shapes: list, face: FaceInfo, params: Placemen
     try:
         pocketed = base_w.difference(tool, engine="manifold")
     except Exception as exc:
-        detail = (" Réparation automatique déjà tentée : " + ", ".join(base_steps) + "."
-                  if base_steps else "")
+        # Say which side is at fault: blaming the model when the logo is the
+        # broken one sends people off repairing a perfectly good STL.
+        culprits = []
+        if not base_w.is_volume:
+            culprits.append(("le modèle 3D", base_steps))
+        if not tool.is_volume:
+            culprits.append(("le logo", tool_steps))
+        if culprits:
+            parts = []
+            for what, steps in culprits:
+                tried = (" (réparation déjà tentée : " + ", ".join(steps) + ")") if steps else ""
+                parts.append(what + tried)
+            who = " et ".join(parts)
+            hint = ("Essayez de simplifier le tracé dans votre éditeur vectoriel "
+                    "(fusionner les tracés, « objet en chemin »), ou utilisez le "
+                    "mode relief." if any(w == "le logo" for w, _ in culprits)
+                    else "Utilisez le mode relief (emboss), qui n'a pas cette "
+                         "contrainte, ou réparez le maillage avant import.")
+            raise MeshError(
+                f"la découpe n'a pas pu aboutir : {who} n'est pas une géométrie "
+                f"fermée exploitable. {hint} Détail technique: {exc}"
+            ) from exc
         raise MeshError(
-            "la découpe du logo n'a pas pu aboutir : le modèle reste "
-            "non étanche (\"watertight\") — il lui manque probablement de la "
-            "matière (surface ouverte) ou ses faces se croisent." + detail +
-            " Utilisez le mode relief (emboss), qui n'a pas cette contrainte, "
-            f"ou réparez le maillage avant import. Détail technique: {exc}"
+            "la découpe n'a pas pu aboutir alors que les deux géométries sont "
+            "fermées — le moteur booléen a refusé l'opération. Essayez le mode "
+            f"relief (emboss). Détail technique: {exc}"
         ) from exc
     if pocketed.is_empty:
         raise MeshError("la découpe a supprimé tout le modèle — logo trop grand/profond ?")

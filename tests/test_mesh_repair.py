@@ -10,7 +10,8 @@ from pathlib import Path
 
 import numpy as np
 import trimesh
-from shapely.geometry import Point
+from shapely.geometry import Point, Polygon
+from shapely.geometry import box as shapely_box
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -150,7 +151,76 @@ class DebossTests(unittest.TestCase):
             mw.deboss(plane, self.shapes, self.face, self.params, depth_mm=1.5)
         message = str(ctx.exception)
         self.assertIn("relief", message)
-        self.assertIn("Réparation automatique déjà tentée", message)
+        self.assertIn("le modèle 3D", message)       # names the guilty side
+        self.assertNotIn("le logo", message)         # and not the innocent one
+        self.assertIn("réparation déjà tentée", message)
+
+
+class LogoSolidTests(unittest.TestCase):
+    """The cutting tool is the other half of "Not all meshes are volumes!".
+    Each of these outlines used to extrude into something no boolean would
+    touch — and, unlike a broken model, the user had done nothing wrong."""
+
+    HEIGHT = 2.0
+
+    def solid(self, polygon):
+        return mw._extrude_polygon(polygon, self.HEIGHT)
+
+    def test_hole_touching_the_outline_at_a_point(self):
+        # a letter counter that kisses the outline: valid geometry, and the
+        # single most common way a real logo pinched the extrusion
+        poly = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)],
+                        [[(2, 1), (5, 0), (8, 1), (5, 6)]])
+        self.assertTrue(poly.is_valid, "case should be valid geometry")
+        self.assertTrue(self.solid(poly).is_volume)
+
+    def test_hole_touching_the_outline_along_an_edge(self):
+        poly = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)],
+                        [[(2, 0), (2, 8), (8, 8), (8, 0)]])
+        self.assertTrue(self.solid(poly).is_volume)
+
+    def test_two_holes_touching_each_other(self):
+        poly = Polygon([(0, 0), (12, 0), (12, 12), (0, 12)],
+                        [[(1, 1), (5, 1), (5, 5), (1, 5)],
+                         [(5, 5), (9, 5), (9, 9), (5, 9)]])
+        self.assertTrue(self.solid(poly).is_volume)
+
+    def test_self_crossing_outline_is_recovered_not_dropped(self):
+        bowtie = Polygon([(0, 0), (10, 10), (10, 0), (0, 10)])
+        self.assertFalse(bowtie.is_valid)
+        self.assertTrue(mw._repaired_polygons(bowtie), "should recover pieces")
+        self.assertTrue(self.solid(bowtie).is_volume)
+
+    def test_overlapping_shapes_extrude_together(self):
+        shapes = [mw.LogoShape(Point(0, 0).buffer(10), "#f00"),
+                  mw.LogoShape(Point(8, 0).buffer(10), "#00f")]
+        params = mw.PlacementParams(width_mm=30.0, rotation_deg=0.0,
+                                     offset_x_mm=0.0, offset_y_mm=0.0)
+        self.assertTrue(mw._logo_local_mesh(shapes, params, self.HEIGHT).is_volume)
+
+    def test_extrusion_volume_matches_the_outline(self):
+        for name, poly in {
+            "square": shapely_box(0, 0, 10, 10),
+            "circle": Point(0, 0).buffer(8, resolution=64),
+            "ring": Point(0, 0).buffer(8).difference(Point(0, 0).buffer(4)),
+            "two holes": Polygon([(0, 0), (20, 0), (20, 10), (0, 10)],
+                                  [[(2, 2), (6, 2), (6, 8), (2, 8)],
+                                   [(12, 2), (18, 2), (18, 8), (12, 8)]]),
+        }.items():
+            with self.subTest(name):
+                solid = self.solid(poly)
+                self.assertAlmostEqual(float(solid.volume), poly.area * self.HEIGHT,
+                                        delta=poly.area * self.HEIGHT * 0.002)
+
+    def test_cut_with_a_pinched_logo(self):
+        """End to end: the exact shape that produced the report."""
+        poly = Polygon([(-4, -4), (4, -4), (4, 4), (-4, 4)],
+                        [[(-2, -1), (0, -4), (2, -1), (0, 2)]])
+        pocketed, fills = mw.deboss(box(), [mw.LogoShape(poly, "#ff0000")],
+                                     DebossTests.face, DebossTests.params, depth_mm=1.5)
+        self.assertTrue(pocketed.is_volume)
+        self.assertEqual(len(fills), 1)
+        self.assertLess(float(pocketed.volume), SIZE ** 3)
 
 
 if __name__ == "__main__":

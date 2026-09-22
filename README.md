@@ -128,6 +128,28 @@ and nothing else. **The cutting tool (the extruded logo) is repaired the
 same way**: an SVG with overlapping or self-touching outlines produced the
 identical error, from the other operand.
 
+### The logo is the other half of it
+
+The same error came just as often from the *cutting tool* — the extruded
+logo — and blaming the model sent people off repairing a perfectly good
+STL. Two construction bugs made ordinary artwork unusable:
+
+- **Walls are now built from the cap triangulation's own boundary**, not
+  from the input rings. The two disagree as soon as a hole touches the
+  outline — a letter counter kissing the edge, say: the triangulation
+  splits the outer edge at the contact point while a ring-based wall spans
+  it in one piece. Every such T-junction left a pair of open edges, the
+  solid was never watertight, and no repair pass could close it.
+- **A shape that pinches to zero width is nudged apart** (`_unpinch`): a
+  hole meeting the outline at a single point leaves the material
+  infinitely thin there, four faces share one edge, and that is not a
+  volume by definition — nor printable. Holes are shrunk by ~0.01% of the
+  shape, below any nozzle, which both fixes the geometry and matches what
+  the printer could do.
+- A **self-crossing outline** (a stroke converted to a path, an "optimized"
+  export) used to be dropped silently, so the piece just went missing.
+  `buffer(0)` rebuilds it into valid pieces instead.
+
 It is not silent: the export sends back an `X-Autologo-Repairs` header and
 the tool page raises a toast naming the repairs, the server logs them, and
 picking *gravé* on a model that isn't watertight shows a notice saying it
@@ -137,7 +159,13 @@ points at relief mode.
 
 `tests/test_mesh_repair.py` builds seven broken meshes, checks each one is
 repaired *and* that the repair preserves the shape (volume within 2%), then
-runs a real cut on every one of them.
+runs a real cut on every one of them. It also covers the logo side: holes
+touching the outline (at a point and along an edge), holes touching each
+other, self-crossing outlines, overlapping shapes, and that an extrusion's
+volume still matches its outline's area exactly.
+
+When a cut genuinely can't happen, the error now names **which** side is at
+fault — the model or the logo — and what was already tried on it.
 
 ## Reading the SVG
 
