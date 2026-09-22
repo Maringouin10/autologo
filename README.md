@@ -105,6 +105,55 @@ filament/color to each.
 | `SESSION_TTL_HOURS` | `6` | how long an upload session (and its files) is kept |
 | `MAX_UPLOAD_MB` | `200` | upload size cap |
 
+## Reading the SVG
+
+A logo is read shape by shape (that is what makes the shape picker and the
+per-color export possible), which means the reader has to reproduce what a
+browser would draw — and that is where misplaced pieces came from:
+
+- **Transforms are composed from the SVG root down.** Every real export
+  (Illustrator artboards, Inkscape layers, Figma frames) nests shapes in
+  transformed groups; a shape lifted out of its ancestors landed at the
+  untransformed position. The matrices are also computed here rather than
+  by trimesh, whose SVG reader mis-reads `rotate(a)` (it treats the angle
+  as radians) and `translate(tx)` (it reuses tx for ty) — both of which
+  silently move a piece somewhere else. `matrix`, `translate`, `scale`,
+  `rotate` (with or without a centre), `skewX`/`skewY` and multi-function
+  transform lists are supported.
+- **Only what the file actually draws is imported.** `<defs>`, `<clipPath>`,
+  `<mask>`, `<symbol>`, `<pattern>` and friends define content that is not
+  rendered on its own — walking into them used to add phantom pieces, most
+  visibly a `<defs>` background rect covering the whole canvas. Elements
+  hidden with `display:none` / `visibility:hidden` are skipped too.
+- **`<use>` is expanded**, with its own `x`/`y`/`transform` applied, so a
+  logo built out of repeated symbols keeps all of its pieces (they used to
+  vanish, or show up once at the original's position).
+- `fill="none"` shapes (stroke-only guides) are still ignored, and colors
+  still come from `fill` attributes, inline styles and `<style>` blocks.
+
+`tests/test_svg_parsing.py` pins all of the above:
+
+```bash
+python -m unittest discover -s tests
+```
+
+## The logo edit step
+
+- **Each thumbnail is drawn in the whole logo's frame**, with the rest of
+  the logo ghosted behind it — so a card shows *where* its piece sits
+  instead of a context-free silhouette scaled to its own bounding box.
+- **The big preview is the editing surface**: click a piece to exclude it,
+  click it again (it stays visible, ghosted) to put it back. Hovering a
+  card outlines the matching piece, and vice versa.
+- A piece that covers nearly the whole logo and is solid gets a **`fond ?`**
+  badge — that is almost always a background plate to remove.
+- **Tout inclure / Tout exclure** plus a `n/m formes incluses` counter.
+- Excluding every piece no longer fires a request the server can only
+  refuse: the step says what is wrong and holds the export/order button.
+- Both the vendor tool and the customer page share one implementation
+  (`app/static/js/logo-editor.js`); on the customer page the thumbnails are
+  drawn in the **chosen filament colors**, not the artwork's own.
+
 ## Couleurs d'impression
 
 The customer picks a filament for **the object itself** and one for **each

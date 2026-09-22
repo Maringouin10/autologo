@@ -5,6 +5,7 @@ import {
   readJson, wireDropzone, markDropzoneFilled, enableStep, markStepDone,
   setBusy, toastError, toastOk,
 } from "./ui.js";
+import { renderLogoEditor } from "./logo-editor.js";
 
 // --- three.js scene setup ----------------------------------------------------
 const viewerEl = document.getElementById("viewer");
@@ -215,8 +216,7 @@ wireDropzone(logoDrop, logoInput, async (file) => {
     state.flipV = false;
     document.getElementById("flip-h-btn").classList.remove("active");
     document.getElementById("flip-v-btn").classList.remove("active");
-    renderShapeList();
-    renderCombinedPreview();
+    renderEditor();
     markStepDone("step-logo");
     enableStep("step-logo-edit", true);
     enableStep("step-face", true);
@@ -229,62 +229,32 @@ wireDropzone(logoDrop, logoInput, async (file) => {
 });
 
 // --- logo edit: shape picker, mirror ---------------------------------------------
-function ringsToPathD(rings) {
-  return rings.map((ring) => {
-    const [first, ...rest] = ring;
-    return `M${first[0]},${first[1]} ` + rest.map((p) => `L${p[0]},${p[1]}`).join(" ") + " Z";
-  }).join(" ");
-}
-
-// One <path> per shape, each filled with the color parsed from the SVG,
-// so the picker and the combined preview show the logo as it will print
-// rather than a single flat silhouette.
-function shapeSvg(shapes) {
-  if (!shapes.length) return "";
-  const minx = Math.min(...shapes.map((s) => s.bbox[0]));
-  const miny = Math.min(...shapes.map((s) => s.bbox[1]));
-  const maxx = Math.max(...shapes.map((s) => s.bbox[2]));
-  const maxy = Math.max(...shapes.map((s) => s.bbox[3]));
-  const w = Math.max(maxx - minx, 1e-3), h = Math.max(maxy - miny, 1e-3);
-  const pad = Math.max(w, h) * 0.08;
-  const vb = `${minx - pad} ${miny - pad} ${w + 2 * pad} ${h + 2 * pad}`;
-  const paths = shapes.map((s) =>
-    `<path fill="${s.color || "#36d17a"}" fill-rule="evenodd" d="${ringsToPathD(s.rings)}"/>`
-  ).join("");
-  return `<svg viewBox="${vb}" preserveAspectRatio="xMidYMid meet">${paths}</svg>`;
-}
-
-function renderShapeList() {
-  const list = document.getElementById("shape-list");
-  list.innerHTML = "";
-  for (const shape of state.logoShapes) {
-    const card = document.createElement("label");
-    card.className = "shape-card" + (state.excluded.has(shape.index) ? " excluded" : "");
-    card.innerHTML =
-      `<input type="checkbox" ${state.excluded.has(shape.index) ? "" : "checked"}>` +
-      shapeSvg([shape]);
-    card.querySelector("input").addEventListener("change", (e) => {
-      if (e.target.checked) state.excluded.delete(shape.index);
-      else state.excluded.add(shape.index);
-      card.classList.toggle("excluded", !e.target.checked);
-      renderCombinedPreview();
+// Cards are drawn in the whole logo's frame (see logo-editor.js), so each
+// one shows WHERE its piece sits; the big preview is clickable.
+function renderEditor() {
+  renderLogoEditor({
+    listHost: document.getElementById("shape-list"),
+    previewHost: document.getElementById("combined-preview-wrap"),
+    shapes: state.logoShapes,
+    excluded: state.excluded,
+    flipH: state.flipH,
+    flipV: state.flipV,
+    onToggle: (index, included) => {
+      if (included) state.excluded.delete(index);
+      else state.excluded.add(index);
+      renderEditor();
       syncLogoEdit();
-    });
-    list.appendChild(card);
-  }
+    },
+    onSetAll: (included) => {
+      state.excluded = included ? new Set() : new Set(state.logoShapes.map((s) => s.index));
+      renderEditor();
+      syncLogoEdit();
+    },
+  });
 }
 
-function renderCombinedPreview() {
-  const active = state.logoShapes.filter((s) => !state.excluded.has(s.index));
-  const wrap = document.getElementById("combined-preview-wrap");
-  wrap.innerHTML = active.length
-    ? shapeSvg(active)
-    : '<p class="hint">(aucune forme incluse)</p>';
-  const svg = wrap.querySelector("svg");
-  if (svg) {
-    svg.id = "combined-preview";
-    svg.style.transform = `scale(${state.flipH ? -1 : 1}, ${state.flipV ? -1 : 1})`;
-  }
+function includedShapeCount() {
+  return state.logoShapes.filter((s) => !state.excluded.has(s.index)).length;
 }
 
 let logoEditTimer = null;
@@ -292,6 +262,15 @@ function syncLogoEdit() {
   if (logoEditTimer) clearTimeout(logoEditTimer);
   logoEditTimer = setTimeout(async () => {
     if (!state.sessionId) return;
+    // Nothing left to extrude — the server would refuse, so say it here and
+    // hold the export rather than letting it fail later.
+    const exportBtn = document.getElementById("export-btn");
+    if (state.hasLogo && includedShapeCount() === 0) {
+      logoInfo.textContent = "Aucune forme incluse — rétablissez-en au moins une.";
+      exportBtn.disabled = true;
+      return;
+    }
+    if (state.faceIndex != null) exportBtn.disabled = false;
     try {
       const res = await fetch(`/api/session/${state.sessionId}/logo/edit`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -312,13 +291,13 @@ function syncLogoEdit() {
 document.getElementById("flip-h-btn").addEventListener("click", (e) => {
   state.flipH = !state.flipH;
   e.currentTarget.classList.toggle("active", state.flipH);
-  renderCombinedPreview();
+  renderEditor();
   syncLogoEdit();
 });
 document.getElementById("flip-v-btn").addEventListener("click", (e) => {
   state.flipV = !state.flipV;
   e.currentTarget.classList.toggle("active", state.flipV);
-  renderCombinedPreview();
+  renderEditor();
   syncLogoEdit();
 });
 

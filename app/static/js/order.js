@@ -4,6 +4,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import {
   readJson, markDropzoneFilled, setBusy, toastError, wireCopyButtons,
 } from "./ui.js";
+import { renderLogoEditor } from "./logo-editor.js";
 
 const PRODUCT_ID = document.body.dataset.productId;
 
@@ -128,31 +129,6 @@ function applyModelColor() {
   }
 }
 
-// --- shape-picker helpers (svg thumbnails) --------------------------------------
-function ringsToPathD(rings) {
-  return rings.map((ring) => {
-    const [first, ...rest] = ring;
-    return `M${first[0]},${first[1]} ` + rest.map((p) => `L${p[0]},${p[1]}`).join(" ") + " Z";
-  }).join(" ");
-}
-// One <path> per shape, filled with the color it will actually print in
-// (the chosen filament, falling back to the SVG's own fill), so the picker
-// and the flat preview match the 3D view.
-function shapeSvg(shapes) {
-  if (!shapes.length) return "";
-  const minx = Math.min(...shapes.map((s) => s.bbox[0]));
-  const miny = Math.min(...shapes.map((s) => s.bbox[1]));
-  const maxx = Math.max(...shapes.map((s) => s.bbox[2]));
-  const maxy = Math.max(...shapes.map((s) => s.bbox[3]));
-  const w = Math.max(maxx - minx, 1e-3), h = Math.max(maxy - miny, 1e-3);
-  const pad = Math.max(w, h) * 0.08;
-  const vb = `${minx - pad} ${miny - pad} ${w + 2 * pad} ${h + 2 * pad}`;
-  const paths = shapes.map((s) =>
-    `<path fill="${printedColor(s.color)}" fill-rule="evenodd" d="${ringsToPathD(s.rings)}"/>`
-  ).join("");
-  return `<svg viewBox="${vb}" preserveAspectRatio="xMidYMid meet">${paths}</svg>`;
-}
-
 // --- order-wide state ----------------------------------------------------------
 const state = {
   palette: [],
@@ -245,6 +221,13 @@ function onDragEnd() {
 // It owns the face geometry, the server-side zone state and the preview mesh.
 // A control set (below) drives one engine (a face on its own) or several at
 // once (faces the vendor grouped, printed with the same logo).
+/** Shapes still printing for this engine — zero means nothing to place. */
+function includedCount(engine) {
+  return engine.hasLogo
+    ? engine.shapes.filter((s) => !engine.excluded.has(s.index)).length
+    : 0;
+}
+
 function makeEngine(z) {
   const engine = {
     id: z.id,
@@ -363,8 +346,8 @@ function makeControls(groupEngines, { title, compact = false }) {
       <span class="dz-sub">Fichier .svg</span>
     </label>
     <div class="zone-edit hidden">
-      <p class="hint">Décochez une forme pour l'exclure du logo imprimé.</p>
-      <div class="shape-list zone-shape-list"></div>
+      <p class="hint">Décochez une forme — ou cliquez-la dans l'aperçu — pour l'exclure.</p>
+      <div class="zone-shape-list"></div>
       <div class="flip-row">
         <button type="button" class="toggle-btn zone-flip-h">⇋ Miroir H</button>
         <button type="button" class="toggle-btn zone-flip-v">⇵ Miroir V</button>
@@ -495,8 +478,7 @@ function makeControls(groupEngines, { title, compact = false }) {
       // colors that are still there, drop the ones that are gone.
       pruneColorMap();
       adoptDefaultColors();
-      renderShapeList();
-      renderCombinedPreview();
+      renderEditor();
       el.querySelector(".zone-edit").classList.remove("hidden");
       el.querySelector(".zone-placement").classList.remove("hidden");
       status.textContent = "✓ Logo placé — ajustez-le à votre goût";
@@ -516,39 +498,41 @@ function makeControls(groupEngines, { title, compact = false }) {
   drop.addEventListener("drop", (e) => { const f = e.dataTransfer.files[0]; if (f) handleFile(f); });
 
   // --- shape picker / mirror ---
-  function activeShapes() {
-    return lead.shapes.filter((s) => !lead.excluded.has(s.index));
+  // Every engine this control set drives carries the same logo, so the lead
+  // engine's shapes are what gets drawn and each change is mirrored to all.
+  function setExcluded(mutate) {
+    for (const engine of ctl.engines) mutate(engine);
   }
-  function renderShapeList() {
-    const list = el.querySelector(".zone-shape-list");
-    list.innerHTML = "";
-    for (const shape of lead.shapes) {
-      const card = document.createElement("label");
-      card.className = "shape-card" + (lead.excluded.has(shape.index) ? " excluded" : "");
-      card.innerHTML = `<input type="checkbox" ${lead.excluded.has(shape.index) ? "" : "checked"}>` +
-        shapeSvg([shape]);
-      card.querySelector("input").addEventListener("change", (e) => {
-        for (const engine of ctl.engines) {
-          if (e.target.checked) engine.excluded.delete(shape.index);
-          else engine.excluded.add(shape.index);
-        }
-        card.classList.toggle("excluded", !e.target.checked);
-        renderCombinedPreview();
-        syncEdit();
-      });
-      list.appendChild(card);
-    }
-  }
-  ctl.renderShapeList = renderShapeList;
 
-  function renderCombinedPreview() {
-    const wrap = el.querySelector(".zone-combined-wrap");
-    const active = activeShapes();
-    wrap.innerHTML = active.length ? shapeSvg(active) : '<p class="hint">(aucune forme incluse)</p>';
-    const svg = wrap.querySelector("svg");
-    if (svg) svg.style.transform = `scale(${lead.flipH ? -1 : 1}, ${lead.flipV ? -1 : 1})`;
+  function renderEditor() {
+    renderLogoEditor({
+      listHost: el.querySelector(".zone-shape-list"),
+      previewHost: el.querySelector(".zone-combined-wrap"),
+      shapes: lead.shapes,
+      excluded: lead.excluded,
+      flipH: lead.flipH,
+      flipV: lead.flipV,
+      // The customer picks the filament each SVG color prints in — the
+      // cards and the preview show that, not the original artwork color.
+      colorOf: (shape) => printedColor(shape.color),
+      onToggle: (index, included) => {
+        setExcluded((engine) => {
+          if (included) engine.excluded.delete(index);
+          else engine.excluded.add(index);
+        });
+        renderEditor();
+        syncEdit();
+      },
+      onSetAll: (included) => {
+        setExcluded((engine) => {
+          engine.excluded = included ? new Set() : new Set(lead.shapes.map((s) => s.index));
+        });
+        renderEditor();
+        syncEdit();
+      },
+    });
   }
-  ctl.renderCombinedPreview = renderCombinedPreview;
+  ctl.renderEditor = renderEditor;
 
   async function pushEditAll() {
     let last = null;
@@ -563,9 +547,20 @@ function makeControls(groupEngines, { title, compact = false }) {
   function syncEdit() {
     if (editTimer) clearTimeout(editTimer);
     editTimer = setTimeout(async () => {
+      // A logo with every shape excluded has nothing to extrude: the server
+      // rightly refuses it, so say so here instead of firing a request that
+      // can only come back as an error.
+      if (lead.hasLogo && includedCount(lead) === 0) {
+        status.textContent = "Aucune forme incluse — rétablissez-en au moins une";
+        status.classList.remove("ready");
+        updateSubmitState();
+        return;
+      }
       try {
         await pushEditAll();
         await refreshAll();
+        status.textContent = "✓ Logo placé — ajustez-le à votre goût";
+        status.classList.add("ready");
         renderColorPanel();
       } catch (err) {
         toastError(err.message);
@@ -577,14 +572,14 @@ function makeControls(groupEngines, { title, compact = false }) {
     const on = !lead.flipH;
     ctl.engines.forEach((engine) => { engine.flipH = on; });
     e.currentTarget.classList.toggle("active", on);
-    renderCombinedPreview();
+    renderEditor();
     syncEdit();
   });
   el.querySelector(".zone-flip-v").addEventListener("click", (e) => {
     const on = !lead.flipV;
     ctl.engines.forEach((engine) => { engine.flipV = on; });
     e.currentTarget.classList.toggle("active", on);
-    renderCombinedPreview();
+    renderEditor();
     syncEdit();
   });
 
@@ -610,8 +605,7 @@ function makeControls(groupEngines, { title, compact = false }) {
                         `${lead.shapes.length} forme(s) — cliquez pour changer`);
     el.querySelector(".zone-flip-h").classList.toggle("active", lead.flipH);
     el.querySelector(".zone-flip-v").classList.toggle("active", lead.flipV);
-    renderShapeList();
-    renderCombinedPreview();
+    renderEditor();
     el.querySelector(".zone-edit").classList.remove("hidden");
     el.querySelector(".zone-placement").classList.remove("hidden");
     status.textContent = "✓ Logo placé — ajustez-le à votre goût";
@@ -800,8 +794,7 @@ function renderColorPanel() {
         try {
           for (const panel of panels) {
             for (const ctl of panel.controls) {
-              ctl.renderShapeList();
-              ctl.renderCombinedPreview();
+              ctl.renderEditor();
               await ctl.pushEditAll();
               await ctl.refreshAll();
             }
@@ -834,7 +827,7 @@ const engines = [];
 const panels = [];
 
 function updateSubmitState() {
-  const ready = engines.filter((e) => e.hasLogo && e.previewObject).length;
+  const ready = engines.filter((e) => e.hasLogo && e.previewObject && includedCount(e) > 0).length;
   const total = engines.length;
   const over = usedColors().length > state.maxColors;
   const allReady = total > 0 && ready === total && !over;

@@ -10,6 +10,7 @@ once, on demand, when the user hits Export.
 """
 from __future__ import annotations
 
+import copy
 import io
 import math
 import re
@@ -335,13 +336,170 @@ def _element_fill(el, inherited: str | None, css: dict) -> str | None:
     return fill
 
 
-def _collect_svg_shapes(el, inherited: str | None, css: dict, out: list) -> list:
+# --- transforms ---------------------------------------------------------------
+# Every real-world logo nests its shapes in transformed groups (Illustrator
+# artboards, Inkscape layers, Figma frames), so a shape's position is only
+# correct once its whole ancestor chain is applied. We compose the matrices
+# ourselves instead of leaning on trimesh: its SVG reader mis-reads
+# `rotate(a)` (it treats the angle as radians) and `translate(tx)` (it uses
+# tx for ty as well), which silently lands pieces somewhere else entirely.
+_IDENTITY = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)   # SVG order: a, b, c, d, e, f
+_TRANSFORM_RE = re.compile(r"(matrix|translate|scale|rotate|skewX|skewY)\s*\(([^)]*)\)")
+_NUMBER_RE = re.compile(r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?")
+
+
+def _mat_mul(m, n):
+    """m · n — apply n first, then m (SVG's own nesting order)."""
+    ma, mb, mc, md, me, mf = m
+    na, nb, nc, nd, ne, nf = n
+    return (
+        ma * na + mc * nb,
+        mb * na + md * nb,
+        ma * nc + mc * nd,
+        mb * nc + md * nd,
+        ma * ne + mc * nf + me,
+        mb * ne + md * nf + mf,
+    )
+
+
+def _parse_transform(text: str | None):
+    """An SVG `transform` attribute as one matrix. Unknown functions are
+    skipped rather than aborting the whole chain — a logo with one exotic
+    transform should still come through with everything else in place."""
+    if not text:
+        return _IDENTITY
+    matrix = _IDENTITY
+    for name, raw_args in _TRANSFORM_RE.findall(text):
+        args = [float(v) for v in _NUMBER_RE.findall(raw_args)]
+        step = _IDENTITY
+        if name == "matrix" and len(args) >= 6:
+            step = tuple(args[:6])
+        elif name == "translate" and args:
+            # translate(tx) means ty = 0 — never ty = tx.
+            step = (1.0, 0.0, 0.0, 1.0, args[0], args[1] if len(args) > 1 else 0.0)
+        elif name == "scale" and args:
+            sx = args[0]
+            sy = args[1] if len(args) > 1 else sx
+            step = (sx, 0.0, 0.0, sy, 0.0, 0.0)
+        elif name == "rotate" and args:
+            angle = math.radians(args[0])          # SVG angles are DEGREES
+            cos_a, sin_a = math.cos(angle), math.sin(angle)
+            rot = (cos_a, sin_a, -sin_a, cos_a, 0.0, 0.0)
+            if len(args) >= 3:                      # rotate(a, cx, cy)
+                cx, cy = args[1], args[2]
+                step = _mat_mul(_mat_mul((1.0, 0.0, 0.0, 1.0, cx, cy), rot),
+                                 (1.0, 0.0, 0.0, 1.0, -cx, -cy))
+            else:
+                step = rot
+        elif name == "skewX" and args:
+            step = (1.0, 0.0, math.tan(math.radians(args[0])), 1.0, 0.0, 0.0)
+        elif name == "skewY" and args:
+            step = (1.0, math.tan(math.radians(args[0])), 0.0, 1.0, 0.0, 0.0)
+        matrix = _mat_mul(matrix, step)
+    return matrix
+
+
+def _shapely_matrix(m):
+    """SVG (a,b,c,d,e,f) -> shapely's [a, b, d, e, xoff, yoff] order."""
+    a, b, c, d, e, f = m
+    return [a, c, b, d, e, f]
+
+
+# --- what actually renders ------------------------------------------------------
+# Subtrees that define reusable/auxiliary content: they are NOT drawn unless
+# something references them. Walking into them used to pull phantom pieces
+# into the logo — most visibly a <defs> background rect covering the whole
+# canvas, or a <clipPath> outline showing up as a solid blob.
+_NON_RENDERED_TAGS = {
+    "defs", "clippath", "mask", "symbol", "marker", "pattern", "filter",
+    "metadata", "title", "desc", "style", "script",
+    "lineargradient", "radialgradient",
+}
+_CONTAINER_TAGS = {"g", "a", "svg", "switch"}
+_XLINK_NS = "http://www.w3.org/1999/xlink"
+_MAX_USE_DEPTH = 8
+
+
+def _style_value(style: str | None, prop: str) -> str | None:
+    for decl in (style or "").split(";"):
+        if ":" in decl:
+            k, v = decl.split(":", 1)
+            if k.strip().lower() == prop:
+                return v.strip().lower()
+    return None
+
+
+def _is_hidden(el) -> bool:
+    """`display:none` / `visibility:hidden`, as attribute or inline style.
+    Exporters leave hidden guides, alternate versions and scratch layers in
+    the file; drawing them would add pieces the designer never sees."""
+    style = el.get("style")
+    if (el.get("display") or "").strip().lower() == "none":
+        return True
+    if _style_value(style, "display") == "none":
+        return True
+    if (el.get("visibility") or "").strip().lower() in ("hidden", "collapse"):
+        return True
+    if _style_value(style, "visibility") in ("hidden", "collapse"):
+        return True
+    return False
+
+
+def _collect_svg_shapes(el, inherited: str | None, css: dict, out: list,
+                         matrix=_IDENTITY, ids: dict | None = None, depth: int = 0) -> list:
+    """Walk the document, collecting (element, fill, matrix) for everything
+    that actually gets drawn — with `matrix` the full transform from the SVG
+    root down to that element."""
+    tag = el.tag.split("}")[-1].lower()
+    if tag in _NON_RENDERED_TAGS or _is_hidden(el):
+        return out
+
     fill = _element_fill(el, inherited, css)
-    if el.tag.split("}")[-1] in _SVG_SHAPE_TAGS:
-        out.append((el, fill))
+    here = _mat_mul(matrix, _parse_transform(el.get("transform")))
+
+    if tag in _SVG_SHAPE_TAGS:
+        out.append((el, fill, here))
+        return out
+
+    if tag == "use":
+        if depth < _MAX_USE_DEPTH and ids is not None:
+            _expand_use(el, fill, css, out, here, ids, depth)
+        return out
+
     for child in el:
-        _collect_svg_shapes(child, fill, css, out)
+        _collect_svg_shapes(child, fill, css, out, here, ids, depth)
     return out
+
+
+def _expand_use(el, fill, css, out, matrix, ids, depth):
+    """<use href="#id" x= y=> draws a copy of another element. Ignoring it
+    (as we used to) drops pieces from any logo built out of repeated
+    symbols, and leaves the original sitting at the wrong place if it also
+    happens to be reachable."""
+    ref = (el.get("href") or el.get(f"{{{_XLINK_NS}}}href") or "").strip()
+    if not ref.startswith("#"):
+        return
+    target = ids.get(ref[1:])
+    if target is None:
+        return
+    try:
+        dx = float(el.get("x") or 0.0)
+        dy = float(el.get("y") or 0.0)
+    except ValueError:
+        dx = dy = 0.0
+    placed = _mat_mul(matrix, (1.0, 0.0, 0.0, 1.0, dx, dy))
+
+    clone = copy.deepcopy(target)
+    clone_tag = clone.tag.split("}")[-1].lower()
+    if clone_tag in ("symbol", "svg"):
+        # A referenced <symbol> renders its children; the symbol element
+        # itself never draws.
+        for child in clone:
+            _collect_svg_shapes(child, fill, css, out, placed, ids, depth + 1)
+        return
+    # Referenced content lives in <defs>, so hand it to the walker directly
+    # rather than letting the _NON_RENDERED_TAGS skip apply to its parent.
+    _collect_svg_shapes(clone, fill, css, out, placed, ids, depth + 1)
 
 
 def _polygons_of(path2d) -> list:
@@ -400,7 +558,11 @@ def load_logo(path: str) -> list:
     except Exception as exc:
         raise MeshError(f"impossible de lire le SVG ({exc})") from exc
 
-    elements = _collect_svg_shapes(root, None, _parse_stylesheet(root), [])
+    # Any element can be referenced by a <use>, including one inside <defs>,
+    # so the id index is built over the whole document.
+    ids = {el.get("id"): el for el in root.iter() if el.get("id")}
+    elements = _collect_svg_shapes(root, None, _parse_stylesheet(root), [],
+                                    _IDENTITY, ids, 0)
     if not elements:
         raise MeshError(
             "le SVG ne contient aucune forme reconnue. S'il contient du "
@@ -411,18 +573,29 @@ def load_logo(path: str) -> list:
     root_attrs = {k: v for k, v in root.attrib.items() if k in ("width", "height", "viewBox")}
     shapes: list[LogoShape] = []
     failures = 0
-    for el, raw_fill in elements:
+    for el, raw_fill, matrix in elements:
         color = _normalize_color(raw_fill)
         if color is None:          # fill="none": a guide/stroke-only shape
             continue
+        # The element is parsed on its own (that is what makes per-shape
+        # colors and the shape picker possible), so its transform — and
+        # every transform above it — is applied here instead, to the
+        # resulting polygons. Its own `transform` is stripped first, or
+        # trimesh would apply it a second time, and wrongly at that.
+        bare = copy.deepcopy(el)
+        bare.attrib.pop("transform", None)
         mini = ET.Element(f"{{{_SVG_NS}}}svg", root_attrs)
-        mini.append(el)
+        mini.append(bare)
         try:
             path2d = trimesh.load_path(io.BytesIO(ET.tostring(mini)), file_type="svg")
             polys = _polygons_of(path2d)
         except Exception:
             failures += 1
             continue
+        if matrix != _IDENTITY:
+            params = _shapely_matrix(matrix)
+            polys = [affinity.affine_transform(poly, params) for poly in polys]
+            polys = [poly for poly in polys if _is_usable_polygon(poly)]
         shapes.extend(LogoShape(p, color) for p in polys)
 
     if not shapes:
