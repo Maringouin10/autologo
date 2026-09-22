@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 from flask import (Flask, abort, flash, jsonify, redirect, render_template,
                     request, send_file, session, url_for)
+import trimesh
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -373,6 +374,9 @@ def upload_model():
         "face_count": int(len(mesh.faces)),
         "bounds": {"min": bounds[0].tolist(), "max": bounds[1].tolist()},
         "scale_mm": round(float(mesh.scale), 2),
+        # Not a blocker — gravé repairs the mesh itself — but worth saying
+        # before the user picks that mode.
+        "is_volume": bool(mesh.is_volume),
     })
 
 
@@ -524,6 +528,7 @@ def export(session_id):
     if mode not in ("emboss", "deboss"):
         return _err(ValueError("mode invalide (emboss|deboss)"))
 
+    repairs: list[str] = []
     try:
         info = mw.find_flat_region(sess.mesh(), sess.face_adjacency(), face_index)
         shapes = sess.active_logo_polygons()
@@ -534,13 +539,19 @@ def export(session_id):
             pocketed, logos = mw.deboss(sess.mesh(), shapes, info, params,
                                          depth_mm=depth_mm, fill_extra_mm=fill_extra_mm)
             named = {"base": pocketed}
+            repairs = pocketed.metadata.get("autologo_repairs") or []
         named.update(_named_logo_meshes(logos, "logo"))
         data_3mf = mw.export_3mf(named)
     except mw.MeshError as exc:
         return _err(exc)
 
-    return send_file(io.BytesIO(data_3mf), mimetype="model/3mf",
-                      as_attachment=True, download_name="autologo.3mf")
+    response = send_file(io.BytesIO(data_3mf), mimetype="model/3mf",
+                          as_attachment=True, download_name="autologo.3mf")
+    # A repaired mesh is not something to hide: the export is a download, so
+    # the only channel back to the page is a header.
+    if repairs:
+        response.headers["X-Autologo-Repairs"] = ", ".join(repairs)
+    return response
 
 
 # --- admin: assembly upload + zone builder --------------------------------------
@@ -597,7 +608,22 @@ def admin_select_face(session_id):
     result = info.to_json()
     result["face_index"] = face_index
     result["part_name"] = part["name"]
+    result["part_is_volume"] = _part_is_volume(sess, part)
     return jsonify(result)
+
+
+def _part_is_volume(sess, part) -> bool:
+    """Whether this part could be cut as-is. Only informational: deboss
+    repairs the mesh at export time (see meshwork.repair_for_boolean)."""
+    try:
+        mesh = sess.mesh()
+        fs, fc = part["face_start"], part["face_count"]
+        sub = trimesh.Trimesh(vertices=mesh.vertices, faces=mesh.faces[fs:fs + fc],
+                               process=False)
+        sub.merge_vertices()
+        return bool(sub.is_volume)
+    except Exception:
+        return True   # never block the vendor over a diagnostic
 
 
 @app.route("/api/admin/products", methods=["POST"])

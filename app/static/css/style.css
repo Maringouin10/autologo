@@ -766,3 +766,9 @@ input[type=range]::-moz-range-thumb {
   font-size: 0.7rem; color: var(--muted); background: rgba(7, 9, 16, 0.75);
   padding: 2px 8px; border-radius: 999px; pointer-events: none; white-space: nowrap;
 }
+
+/* An informational notice inside a step — not an error, not a hint to skim. */
+.hint.notice {
+  background: rgba(255, 198, 92, 0.1); border: 1px solid rgba(255, 198, 92, 0.3);
+  color: var(--text-dim); border-radius: var(--r-sm); padding: 9px 11px; margin: 0 0 12px;
+}

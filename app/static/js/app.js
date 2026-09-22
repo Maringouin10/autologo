@@ -151,6 +151,7 @@ const state = {
   hasLogo: false,
   faceInfo: null,
   logoShapes: [],
+  isVolume: true,
   excluded: new Set(),
   flipH: false,
   flipV: false,
@@ -177,6 +178,8 @@ wireDropzone(modelDrop, modelInput, async (file) => {
     const data = await readJson(res);
     if (!res.ok) throw new Error(data.error || "échec de l'import");
     state.sessionId = data.session_id;
+    state.isVolume = data.is_volume !== false;
+    updateWatertightHint();
     markDropzoneFilled(modelDrop, file.name, `${data.face_count} faces · ~${data.scale_mm} mm`);
     modelInfo.textContent = `${data.face_count} faces, échelle ~${data.scale_mm} mm`;
     loadModelGlb(data.glb_url, data.bounds);
@@ -533,11 +536,21 @@ renderer.domElement.addEventListener("click", async (ev) => {
 });
 
 // --- mode toggle ------------------------------------------------------------
+// Gravé repairs a non-watertight mesh by itself at export time; say so up
+// front, so a model that a slicer calls "broken" isn't a dead end here.
+function updateWatertightHint() {
+  const hint = document.getElementById("watertight-hint");
+  if (!hint) return;
+  const deboss = document.querySelector('input[name=mode]:checked')?.value === "deboss";
+  hint.classList.toggle("hidden", !(deboss && !state.isVolume));
+}
+
 document.querySelectorAll('input[name=mode]').forEach((radio) => {
   radio.addEventListener("change", () => {
     const deboss = document.querySelector('input[name=mode]:checked').value === "deboss";
     document.getElementById("field-sink").classList.toggle("hidden", deboss);
     document.getElementById("field-fill").classList.toggle("hidden", !deboss);
+    updateWatertightHint();
   });
 });
 
@@ -566,6 +579,8 @@ document.getElementById("export-btn").addEventListener("click", async () => {
       const data = await readJson(res);
       throw new Error(data.error || "échec de l'export");
     }
+    const repaired = res.headers.get("X-Autologo-Repairs");
+    if (repaired) toastOk(`Maillage réparé automatiquement avant la découpe (${repaired}).`);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

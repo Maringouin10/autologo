@@ -105,6 +105,40 @@ filament/color to each.
 | `SESSION_TTL_HOURS` | `6` | how long an upload session (and its files) is kept |
 | `MAX_UPLOAD_MB` | `200` | upload size cap |
 
+## Automatic mesh repair (gravé)
+
+A boolean cut needs both operands to be *volumes* — watertight, consistently
+wound, positive volume — and most real models aren't. That used to end the
+job with **"Not all meshes are volumes!"** and a suggestion to go repair the
+file yourself. Now `meshwork.repair_for_boolean()` fixes what is fixable,
+automatically, before the cut:
+
+| what it does | what it fixes |
+|---|---|
+| weld vertices, drop duplicate / zero-area / NaN faces | STL triangles exported unwelded (the most common case by far), duplicated faces, slivers |
+| `fix_winding` + `fix_inversion` | a face or two exported inside-out |
+| drop disconnected scraps (keeping anything with a real share of the surface) | a stray triangle or leftover sketch line floating next to the part |
+| `fill_holes` | a missing face, an open corner |
+| weld again at a tolerance scaled to the model (0.001% → 0.05% of its size) | the hairline cracks CAD exports leave behind |
+| `fix_normals` | anything left |
+
+Each step runs on a copy, is kept only if it helps, and the chain stops as
+soon as the mesh qualifies — a healthy model pays for one `is_volume` check
+and nothing else. **The cutting tool (the extruded logo) is repaired the
+same way**: an SVG with overlapping or self-touching outlines produced the
+identical error, from the other operand.
+
+It is not silent: the export sends back an `X-Autologo-Repairs` header and
+the tool page raises a toast naming the repairs, the server logs them, and
+picking *gravé* on a model that isn't watertight shows a notice saying it
+will be repaired at export. If a mesh genuinely cannot be closed (an open
+surface with no inside), the error now says what was already attempted and
+points at relief mode.
+
+`tests/test_mesh_repair.py` builds seven broken meshes, checks each one is
+repaired *and* that the repair preserves the shape (volume within 2%), then
+runs a real cut on every one of them.
+
 ## Reading the SVG
 
 A logo is read shape by shape (that is what makes the shape picker and the
@@ -233,7 +267,7 @@ Jinja commun (`app/templates/base.html`).
   4th+ color is merged into the nearest kept one rather than dropped, and
   `fill="none"` shapes (stroke-only guides) are ignored. An SVG with no
   fill info prints as a single default color, exactly as before.
-- If a *gravé* export fails with a "not watertight" error, the source model
-  has gaps/non-manifold geometry that the boolean engine can't cut through
-  cleanly — repair it first (e.g. in Blender / PrusaSlicer's fix tool), or
-  use *relief* mode instead, which has no such requirement.
+- A *gravé* export no longer fails on a model that isn't watertight: the
+  mesh is repaired automatically first (see **Automatic mesh repair**). Only
+  a model with no inside at all — an open surface — still can't be cut, and
+  relief mode remains the way out.

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import io
+import logging
 import math
 import re
 import xml.etree.ElementTree as ET
@@ -21,6 +22,7 @@ from dataclasses import dataclass, field
 import mapbox_earcut as earcut
 import numpy as np
 import trimesh
+from trimesh import repair
 from shapely import affinity
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry import box as shapely_box
@@ -32,6 +34,9 @@ NORMAL_TOL_DEG = 5.0
 # How far (as a fraction of the model's bounding-box diagonal) a face's plane
 # may drift from the clicked face's plane and still count as "the same face".
 PLANE_TOL_FRAC = 0.0015
+
+log = logging.getLogger("autologo.meshwork")
+
 
 class MeshError(Exception):
     pass
@@ -1097,6 +1102,105 @@ def emboss(shapes: list, face: FaceInfo, params: PlacementParams,
             for color, mesh in _logo_meshes_by_color(shapes, params, height).items()}
 
 
+# --- mesh repair ----------------------------------------------------------------
+# A boolean cut needs both operands to be "volumes": watertight, consistently
+# wound, positive volume. Models that look perfectly fine in a viewer fail
+# that test constantly — an STL exports its triangles unwelded, a CAD export
+# leaves a hairline crack, a face comes through flipped, a stray triangle
+# floats next to the part. Rather than hand that back to the user as "not
+# watertight, repair it yourself", fix what is fixable, in order of how
+# destructive each step is, and stop as soon as the mesh qualifies.
+
+def _clean_mesh(m: trimesh.Trimesh) -> None:
+    """Weld coincident vertices and drop the faces no renderer would draw:
+    duplicates, zero-area slivers, ones with NaN/inf coordinates."""
+    m.remove_infinite_values()
+    m.merge_vertices()
+    m.update_faces(m.nondegenerate_faces())
+    m.update_faces(m.unique_faces())
+    m.remove_unreferenced_vertices()
+
+
+def _drop_debris(m: trimesh.Trimesh) -> trimesh.Trimesh:
+    """Discard disconnected scraps — a stray triangle or a leftover sketch
+    line keeps the whole mesh from ever being closed. Anything with a real
+    share of the surface is kept, so a legitimately multi-shell part (a
+    model with a separate inner wall) survives."""
+    try:
+        parts = m.split(only_watertight=False)
+    except Exception:
+        return m
+    if len(parts) < 2:
+        return m
+    biggest = max(parts, key=lambda p: p.area)
+    kept = [p for p in parts if p.area >= biggest.area * 0.01]
+    if len(kept) == len(parts):
+        return m
+    return trimesh.util.concatenate(kept) if len(kept) > 1 else biggest
+
+
+def _weld_at(m: trimesh.Trimesh, fraction: float) -> trimesh.Trimesh:
+    """Merge vertices that sit within `fraction` of the model's size of each
+    other — what closes the hairline cracks CAD exports leave behind. The
+    tolerance is relative so it means the same thing on a 10 mm keychain and
+    a 300 mm panel."""
+    tolerance = max(float(m.scale) * fraction, 1e-9)
+    digits = int(round(-math.log10(tolerance)))
+    welded = m.copy()
+    welded.merge_vertices(digits_vertex=max(0, min(digits, 8)))
+    _clean_mesh(welded)
+    return welded
+
+
+def repair_for_boolean(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, list[str]]:
+    """Return (mesh fit for a boolean, the repairs that were needed).
+
+    Never raises and never returns something worse than it was given: each
+    step runs on a copy and is only kept if it actually helps. An empty step
+    list means the mesh was already fine, so a healthy model pays nothing
+    but one `is_volume` check."""
+    if mesh.is_volume:
+        return mesh, []
+
+    steps: list[str] = []
+    work = mesh.copy()
+
+    _clean_mesh(work)
+    steps.append("nettoyage des faces")
+    if work.is_volume:
+        return work, steps
+
+    repair.fix_winding(work)
+    repair.fix_inversion(work)
+    steps.append("orientation des faces")
+    if work.is_volume:
+        return work, steps
+
+    cleaned = _drop_debris(work)
+    if cleaned is not work:
+        _clean_mesh(cleaned)
+        work = cleaned
+        steps.append("suppression des débris")
+        if work.is_volume:
+            return work, steps
+
+    repair.fill_holes(work)
+    repair.fix_winding(work)
+    steps.append("bouchage des trous")
+    if work.is_volume:
+        return work, steps
+
+    for fraction in (1e-5, 1e-4, 5e-4):
+        welded = _weld_at(work, fraction)
+        if welded.is_volume:
+            steps.append(f"soudure des fissures ({fraction * 100:.3g}% de la taille)")
+            return welded, steps
+
+    repair.fix_normals(work)
+    steps.append("recalcul des normales")
+    return work, steps
+
+
 def deboss(base: trimesh.Trimesh, shapes: list, face: FaceInfo, params: PlacementParams,
            depth_mm: float, fill_extra_mm: float = 0.0
            ) -> tuple[trimesh.Trimesh, dict[str, trimesh.Trimesh]]:
@@ -1107,18 +1211,30 @@ def deboss(base: trimesh.Trimesh, shapes: list, face: FaceInfo, params: Placemen
     cut_over = max(1.0, depth_mm * 0.5)  # tool must poke out past the surface to cut cleanly
     tool_local = _logo_local_mesh(shapes, params, depth_mm + cut_over)
     tool = _to_world(tool_local, face, z_shift=-depth_mm)
-    # STL/OBJ triangles are usually unwelded (each face owns private vertex
-    # copies), so an un-merged mesh never satisfies is_volume even when it is
-    # geometrically closed — weld before handing it to the boolean engine.
-    base_w = base.copy()
-    base_w.merge_vertices()
+
+    # Both operands are repaired in place of the old "just weld the base"
+    # step: the cutting tool itself can come out non-manifold from an SVG
+    # with overlapping or self-touching outlines, and that failed with the
+    # very same "not a volume" error as a broken model.
+    base_w, base_steps = repair_for_boolean(base)
+    tool, tool_steps = repair_for_boolean(tool)
+    if base_steps:
+        log.info("modèle réparé avant découpe: %s", ", ".join(base_steps))
+    if tool_steps:
+        log.info("logo réparé avant découpe: %s", ", ".join(tool_steps))
+    repairs = list(base_steps)
+
     try:
         pocketed = base_w.difference(tool, engine="manifold")
     except Exception as exc:
+        detail = (" Réparation automatique déjà tentée : " + ", ".join(base_steps) + "."
+                  if base_steps else "")
         raise MeshError(
-            "la découpe du logo a échoué — le modèle n'est probablement pas "
-            "étanche (\"watertight\"). Essayez le mode relief (emboss) à la "
-            f"place, ou réparez le maillage avant import. Détail: {exc}"
+            "la découpe du logo n'a pas pu aboutir : le modèle reste "
+            "non étanche (\"watertight\") — il lui manque probablement de la "
+            "matière (surface ouverte) ou ses faces se croisent." + detail +
+            " Utilisez le mode relief (emboss), qui n'a pas cette contrainte, "
+            f"ou réparez le maillage avant import. Détail technique: {exc}"
         ) from exc
     if pocketed.is_empty:
         raise MeshError("la découpe a supprimé tout le modèle — logo trop grand/profond ?")
@@ -1126,6 +1242,7 @@ def deboss(base: trimesh.Trimesh, shapes: list, face: FaceInfo, params: Placemen
     fills = {color: _to_world(mesh, face, z_shift=-depth_mm)
              for color, mesh in _logo_meshes_by_color(
                  shapes, params, depth_mm + fill_extra_mm).items()}
+    pocketed.metadata["autologo_repairs"] = repairs
     return pocketed, fills
 
 

@@ -113,7 +113,7 @@ function addZoneMarker(face) {
 // upload step — a published product's model is fixed, since its zones are
 // pinned to that mesh's face indices — and starts from its stored zones.
 const EDIT_PRODUCT_ID = document.body.dataset.productId || null;
-const state = { sessionId: null, currentFace: null, zones: [] };
+const state = { sessionId: null, currentFace: null, zones: [], partIsVolume: true };
 
 function setError(msg) {
   document.getElementById("publish-error").textContent = msg || "";
@@ -207,6 +207,8 @@ renderer.domElement.addEventListener("click", async (ev) => {
     const data = await readJson(res);
     if (!res.ok) throw new Error(data.error || "échec de la sélection de face");
     state.currentFace = data;
+    state.partIsVolume = data.part_is_volume !== false;
+    updateWatertightHint();
     document.getElementById("face-info").textContent =
       `Pièce "${data.part_name}" — face ${data.width.toFixed(1)} × ${data.height.toFixed(1)} mm`;
     document.getElementById("zone-form").classList.remove("hidden");
@@ -232,11 +234,21 @@ function updateZoneReadout() {
 Object.values(zoneSliders).forEach((el) => el.addEventListener("input", updateZoneReadout));
 updateZoneReadout();
 
+// A part that isn't watertight can still be engraved — the export repairs
+// it — but the vendor should know before committing the zone to that mode.
+function updateWatertightHint() {
+  const hint = document.getElementById("watertight-hint");
+  if (!hint) return;
+  const deboss = document.querySelector('input[name=zone-mode]:checked')?.value === "deboss";
+  hint.classList.toggle("hidden", !(deboss && state.partIsVolume === false));
+}
+
 document.querySelectorAll('input[name=zone-mode]').forEach((radio) => {
   radio.addEventListener("change", () => {
     const deboss = document.querySelector('input[name=zone-mode]:checked').value === "deboss";
     document.getElementById("zone-field-sink").classList.toggle("hidden", deboss);
     document.getElementById("zone-field-fill").classList.toggle("hidden", !deboss);
+    updateWatertightHint();
   });
 });
 
