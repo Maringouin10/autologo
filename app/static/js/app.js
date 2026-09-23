@@ -3,7 +3,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import {
   readJson, wireDropzone, markDropzoneFilled, enableStep, markStepDone,
-  setBusy, toastError, toastOk,
+  setBusy, toastError, toastOk, wireRotationPresets,
 } from "./ui.js";
 import { renderLogoEditor } from "./logo-editor.js";
 
@@ -394,15 +394,19 @@ function currentPlacement() {
   el.addEventListener("input", updateReadout));
 
 // --- fit to plate -------------------------------------------------------------
-document.getElementById("fit-btn").addEventListener("click", async () => {
+// Two ways to fill the plate: let the fit pick the best angle, or keep the
+// orientation as placed. The second matters for anything with a horizon —
+// text, a badge — where a few degrees of tilt reads as a mistake.
+async function fitToPlate(btn, keepRotation) {
   if (!state.sessionId || state.faceIndex == null) return;
   setError("");
-  const btn = document.getElementById("fit-btn");
   btn.disabled = true;
   try {
+    const body = { face_index: state.faceIndex };
+    if (keepRotation) body.rotation_deg = parseFloat(sliders.rot.value);
     const res = await fetch(`/api/session/${state.sessionId}/logo/fit`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ face_index: state.faceIndex }),
+      body: JSON.stringify(body),
     });
     const data = await readJson(res);
     if (!res.ok) throw new Error(data.error || "échec de l'ajustement");
@@ -411,13 +415,21 @@ document.getElementById("fit-btn").addEventListener("click", async () => {
     sliders.rot.value = data.rotation_deg;
     sliders.dx.value = 0;
     sliders.dy.value = 0;
+    sliders.rot.dispatchEvent(new Event("input", { bubbles: true }));
     schedulePreview();
   } catch (err) {
     setError(err.message);
   } finally {
     btn.disabled = false;
   }
-});
+}
+
+document.getElementById("fit-btn").addEventListener("click", (ev) =>
+  fitToPlate(ev.currentTarget, false));
+document.getElementById("fit-keep-btn").addEventListener("click", (ev) =>
+  fitToPlate(ev.currentTarget, true));
+
+wireRotationPresets(document.getElementById("rot-presets"), sliders.rot, schedulePreview);
 
 // --- face picking & drag-to-position ---------------------------------------------
 // Clicking an unpicked area of the model selects the flat face under the

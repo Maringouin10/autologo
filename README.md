@@ -310,10 +310,19 @@ Jinja commun (`app/templates/base.html`).
   display colors — set in your slicer/CAD tool) shows that color in every
   viewer and as the gallery card's swatch, instead of the flat default gray.
   Plain STL/OBJ imports, or a 3MF with no color info, keep the default.
-- **Ajuster à la plaque / fit-to-plate** fits the logo against the flat
-  region's *actual outline*, not its bounding box — a round or L-shaped
-  spot is smaller than the rectangle around it — with a 1&nbsp;mm clearance
-  on every side.
+- **Fitting to the plate** comes in two flavours, side by side:
+  *Agrandir au max* scans rotations for the biggest the logo can possibly
+  be, and *Max sans tourner* gives the biggest it can be **at the angle it
+  is already placed at** — a few degrees of tilt buys a little size and
+  reads as a mistake on anything with a horizon (text, a badge). Both fit
+  against the flat region's *actual outline*, not its bounding box — a round
+  or L-shaped spot is smaller than the rectangle around it — with a
+  1&nbsp;mm clearance on every side. On a 30×80 plate with a wide logo:
+  78 mm turned, 28 mm kept flat.
+- **Quarter-turn buttons** (0° / 90° / 180° / 270°) sit above the rotation
+  slider: landing a 0-360 slider exactly on 90 is fiddly, and quarter turns
+  are what people reach for. The active one lights up, and moving the
+  slider by hand clears it.
 - **A logo SVG may use up to 3 colors.** Fills are read from `fill`
   attributes, inline `style="fill:…"`, **and `<style>` blocks with class /
   id / element selectors** (how Illustrator, Figma and most "optimized"

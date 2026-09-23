@@ -3,6 +3,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import {
   readJson, markDropzoneFilled, setBusy, toastError, wireCopyButtons,
+  wireRotationPresets,
 } from "./ui.js";
 import { renderLogoEditor } from "./logo-editor.js";
 
@@ -284,8 +285,11 @@ function makeEngine(z) {
     return data;
   };
 
-  engine.fit = async () => {
-    const res = await fetch(`/api/order/session/${SESSION_ID}/zone/${z.id}/fit`, { method: "POST" });
+  engine.fit = async (rotationDeg = null) => {
+    const res = await fetch(`/api/order/session/${SESSION_ID}/zone/${z.id}/fit`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(rotationDeg === null ? {} : { rotation_deg: rotationDeg }),
+    });
     const data = await readJson(res);
     if (!res.ok) throw new Error(data.error || "échec de l'ajustement");
     return data;
@@ -358,15 +362,25 @@ function makeControls(groupEngines, { title, compact = false }) {
       <p class="hint" style="margin-bottom:10px">
         <b>Glissez le logo</b> directement sur l'objet en 3D, ou utilisez les curseurs.
       </p>
-      <button type="button" class="btn btn-ghost btn-block zone-fit-btn" style="margin-bottom:14px">
-        ⤢ Agrandir au maximum
-      </button>
+      <div class="fit-row">
+        <button type="button" class="btn btn-ghost zone-fit-btn">⤢ Agrandir au max</button>
+        <button type="button" class="btn btn-ghost zone-fit-keep-btn"
+                title="La plus grande taille possible sans changer l'orientation actuelle">
+          ⤢ Max sans tourner
+        </button>
+      </div>
       <div class="field">
         <label>Taille <span class="zone-width-val val"></span></label>
         <input type="range" class="zone-width" min="1" step="0.5">
       </div>
       <div class="field">
         <label>Rotation <span class="zone-rot-val val"></span></label>
+        <div class="rot-presets zone-rot-presets">
+          <button type="button" data-deg="0">0°</button>
+          <button type="button" data-deg="90">90°</button>
+          <button type="button" data-deg="180">180°</button>
+          <button type="button" data-deg="270">270°</button>
+        </div>
         <input type="range" class="zone-rot" min="0" max="360" step="1" value="0">
       </div>
       <div class="field">
@@ -601,20 +615,27 @@ function makeControls(groupEngines, { title, compact = false }) {
   });
 
   // --- fit to plate ---
-  el.querySelector(".zone-fit-btn").addEventListener("click", async () => {
+  // "au max" may tilt the logo to gain size; "sans tourner" keeps the
+  // orientation the customer set, which is what text and badges need.
+  async function fitToPlate(keepRotation) {
     if (!lead.hasLogo) return;
     try {
-      const data = await lead.fit();
+      const data = await lead.fit(keepRotation ? parseFloat(sliders.rot.value) : null);
       if (data.width_mm > Number(sliders.width.max)) sliders.width.max = data.width_mm;
       sliders.width.value = data.width_mm;
       sliders.rot.value = data.rotation_deg;
       sliders.dx.value = 0;
       sliders.dy.value = 0;
+      sliders.rot.dispatchEvent(new Event("input", { bubbles: true }));
       schedulePreview();
     } catch (err) {
       toastError(err.message);
     }
-  });
+  }
+  el.querySelector(".zone-fit-btn").addEventListener("click", () => fitToPlate(false));
+  el.querySelector(".zone-fit-keep-btn").addEventListener("click", () => fitToPlate(true));
+
+  wireRotationPresets(el.querySelector(".zone-rot-presets"), sliders.rot, schedulePreview);
 
   // --- restore the UI for engines that already carry a logo ---
   if (lead.hasLogo) {

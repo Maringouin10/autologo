@@ -816,14 +816,20 @@ def _outline_polygon(face: "FaceInfo") -> ShapelyPolygon:
     return shapely_box(-face.width / 2.0, -face.height / 2.0, face.width / 2.0, face.height / 2.0)
 
 
-def fit_to_face(shapes: list, face: "FaceInfo", margin_mm: float = 1.0) -> tuple[float, float]:
+def fit_to_face(shapes: list, face: "FaceInfo", margin_mm: float = 1.0,
+                 rotation_deg: float | None = None) -> tuple[float, float]:
     """Largest (width_mm, rotation_deg), logo centered on the face's own
     origin, that fits entirely *inside the face's actual shape* — not its
     bounding box, which overestimates the available space on anything
     that isn't itself a rectangle (round, L-shaped, chamfered…) — leaving
     `margin_mm` clear on every side. Coarse-scans rotation, binary-searches
     the max scale at each: exact containment, cheap because each check is
-    just one shapely `.contains()` call."""
+    just one shapely `.contains()` call.
+
+    Pass `rotation_deg` to keep the logo at that angle instead: the biggest
+    it can be *as placed*. Letting the fit tilt a logo by a few degrees wins
+    a little size and looks like a mistake on anything with a horizon —
+    text, a badge, a rectangular plate."""
     region = _outline_polygon(face)
     usable = region.buffer(-margin_mm)
     if usable.is_empty:
@@ -855,6 +861,10 @@ def fit_to_face(shapes: list, face: "FaceInfo", margin_mm: float = 1.0) -> tuple
             else:
                 top = mid
         return lo
+
+    if rotation_deg is not None:
+        angle = float(rotation_deg) % 360.0
+        return round(max_scale_at(angle) * orig_longer, 3), round(angle, 1)
 
     best_scale, best_deg = 0.0, 0.0
     for deg in range(0, 180, 4):

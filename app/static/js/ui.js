@@ -109,6 +109,37 @@ export function setBusy(on, label = "Traitement en cours…") {
   veil.querySelector(".busy-label").textContent = label;
 }
 
+// --- rotation presets --------------------------------------------------------
+/**
+ * Wire a row of quarter-turn buttons to a rotation slider. Dragging a
+ * 0-360 slider onto an exact 90° is fiddly, and quarter turns are what
+ * people actually want most of the time.
+ *
+ * `onChange` runs after the slider is moved, so the caller can refresh its
+ * preview exactly as it does for a drag.
+ */
+export function wireRotationPresets(host, slider, onChange) {
+  if (!host || !slider) return;
+  const buttons = [...host.querySelectorAll("[data-deg]")];
+
+  function syncActive() {
+    const current = Math.round(parseFloat(slider.value)) % 360;
+    for (const btn of buttons) {
+      btn.classList.toggle("active", Number(btn.dataset.deg) === current);
+    }
+  }
+
+  for (const btn of buttons) {
+    btn.addEventListener("click", () => {
+      slider.value = btn.dataset.deg;
+      syncActive();
+      onChange?.();
+    });
+  }
+  slider.addEventListener("input", syncActive);
+  syncActive();
+}
+
 // --- clipboard ---------------------------------------------------------------
 export async function copyText(text, button) {
   let ok = true;

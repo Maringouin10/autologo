@@ -800,3 +800,19 @@ input[type=range]::-moz-range-thumb {
 .shape-suggest:hover { background: rgba(255, 198, 92, 0.22); }
 .shape-suggest:active { transform: translateY(1px); }
 .shape-tool:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* --- fit buttons + quarter-turn presets ----------------------------------- */
+.fit-row { display: flex; gap: 8px; margin-bottom: 14px; }
+.fit-row .btn { flex: 1; padding-left: 10px; padding-right: 10px; font-size: 0.82rem; }
+
+.rot-presets { display: flex; gap: 5px; margin-bottom: 7px; }
+.rot-presets button {
+  flex: 1; padding: 5px 0; border-radius: var(--r-sm); cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg-deep); color: var(--text-dim);
+  font: inherit; font-size: 0.75rem; font-variant-numeric: tabular-nums;
+  transition: all 0.15s;
+}
+.rot-presets button:hover { border-color: #36425e; color: var(--text); }
+.rot-presets button.active {
+  background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 650;
+}

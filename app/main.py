@@ -366,6 +366,17 @@ def _err(exc: Exception, code: int = 400):
     return jsonify({"error": str(exc)}), code
 
 
+def _keep_rotation(data: dict) -> float | None:
+    """`rotation_deg` in the body means "biggest it can be at THIS angle";
+    absent means "find the angle that fits biggest"."""
+    if data.get("rotation_deg") is None:
+        return None
+    try:
+        return float(data["rotation_deg"])
+    except (TypeError, ValueError):
+        return None
+
+
 def _placement_params(data: dict) -> mw.PlacementParams:
     return mw.PlacementParams(
         width_mm=max(1.0, float(data.get("width_mm", 20.0))),
@@ -496,7 +507,8 @@ def fit_logo(session_id):
 
     try:
         info = mw.find_flat_region(sess.mesh(), sess.face_adjacency(), face_index)
-        width_mm, rotation_deg = mw.fit_to_face(sess.active_logo_polygons(), info)
+        width_mm, rotation_deg = mw.fit_to_face(sess.active_logo_polygons(), info,
+                                                 rotation_deg=_keep_rotation(data))
     except mw.MeshError as exc:
         return _err(exc)
     return jsonify({"width_mm": width_mm, "rotation_deg": rotation_deg})
@@ -1011,9 +1023,11 @@ def order_fit(order_session_id, zone_id):
     work = sess.zone(zone_id)
     if not work.has_logo():
         return _err(ValueError("aucun logo importé pour cette zone"))
+    data = request.get_json(force=True, silent=True) or {}
     try:
         face = orders.zone_face(zone_row, db.get_product(sess.product_id))
-        width_mm, rotation_deg = mw.fit_to_face(work.active_logo_polygons(), face)
+        width_mm, rotation_deg = mw.fit_to_face(work.printed_polygons(), face,
+                                                 rotation_deg=_keep_rotation(data))
     except mw.MeshError as exc:
         return _err(exc)
     return jsonify({"width_mm": width_mm, "rotation_deg": rotation_deg})
