@@ -190,6 +190,16 @@ browser would draw — and that is where misplaced pieces came from:
 - **`<use>` is expanded**, with its own `x`/`y`/`transform` applied, so a
   logo built out of repeated symbols keeps all of its pieces (they used to
   vanish, or show up once at the original's position).
+- **Overlaps are flattened the way a browser paints them.** SVG draws in
+  document order, so a shape hides whatever sits under it — but each shape
+  was extruded into its own solid, which left two solids in the same place:
+  the 3D view showed both colors fighting over the same spot, and a slicer
+  would have been handed two filaments for one volume. Each shape now keeps
+  only the part no later shape covers. A background plate comes back punched
+  with holes, a shape hidden completely disappears (it was invisible in the
+  SVG too), and one cut in two becomes two pieces — which is what it is once
+  printed. On a two-circles-on-a-plate logo this removed 3 923 mm² of
+  doubly-painted material.
 - `fill="none"` shapes (stroke-only guides) are still ignored, and colors
   still come from `fill` attributes, inline styles and `<style>` blocks.
 
@@ -209,6 +219,13 @@ python -m unittest discover -s tests
   card outlines the matching piece, and vice versa.
 - A piece that covers nearly the whole logo and is solid gets a **`fond ?`**
   badge — that is almost always a background plate to remove.
+- **One-click cleanups**, shown only when they apply: *Retirer le fond*
+  (the bottom-most shape spanning the whole artwork) and *Retirer N miettes*
+  (specks under 0.4% of the largest piece — stray anchor points, scan dust).
+  A typical messy logo is cleaned in two clicks instead of hunting through
+  thumbnails.
+- **Annuler** undoes the last change (30 steps of history), so cleaning can
+  be trial and error.
 - **Tout inclure / Tout exclure** plus a `n/m formes incluses` counter.
 - Excluding every piece no longer fires a request the server can only
   refuse: the step says what is wrong and holds the export/order button.
@@ -263,6 +280,20 @@ Jinja commun (`app/templates/base.html`).
   zones, pastille « à traiter » s'il y a des commandes en attente) et les
   dates sont relatives (« il y a 2 h »), l'horodatage exact restant en
   infobulle. Chaque commande affiche les filaments choisis en pastilles.
+
+## Orders, admin side
+
+- **Every order has its own page** (`/admin/orders/<code>`, reached from the
+  order code or the 👁 button): the finished 3MF **in a 3D viewer**, with
+  each object shown in the filament the customer picked, next to the
+  filament list, the order's state and the download/done buttons. The
+  preview is the exported file itself, rebuilt server-side as a GLB
+  (`meshwork.scene_to_glb`) and cached beside it — what you see is what
+  prints, not a re-render of the configuration.
+- **Downloads are named after the object**: `mug-personnalise_AB12CD.3mf`
+  instead of `commande_AB12CD.3mf`, and the plain tool names its export
+  after the model you uploaded (`porte-cle-ete-2026_logo.3mf`). Ten of them
+  in a downloads folder stay tellable apart.
 
 ## Notes
 

@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}AutoLogo — Commande {{ order['code'] }}{% endblock %}
+{% block body_attrs %} data-order-code="{{ order['code'] }}"{% endblock %}
+
+{% block head %}
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+{% endblock %}
+
+{% block header %}
+<header class="topbar">
+  <a class="brand" href="{{ url_for('admin_home') }}"><span class="brand-mark">🏷️</span> <span>AutoLogo</span></a>
+  <h1>Commande {{ order['code'] }}</h1>
+  <nav class="topbar-actions">
+    <a class="nav-link" href="{{ url_for('admin_orders') }}">← Commandes</a>
+    <a class="logout" href="{{ url_for('logout') }}">Déconnexion</a>
+  </nav>
+</header>
+{% endblock %}
+
+{% block content %}
+<main class="layout">
+  <aside class="panel">
+    <section class="step">
+      <h2>Ce que le client a commandé</h2>
+      <table class="admin-table order-facts">
+        <tbody>
+          <tr><th>Numéro</th><td><code>{{ order['code'] }}</code></td></tr>
+          <tr>
+            <th>Produit</th>
+            <td>
+              {% if product %}
+                <a href="{{ url_for('admin_product_detail', product_id=product['id']) }}">{{ product['name'] }}</a>
+              {% else %}<span class="muted">supprimé</span>{% endif %}
+            </td>
+          </tr>
+          <tr>
+            <th>Reçue</th>
+            <td title="{{ order['created_at']|fr_datetime }}">{{ order['created_at']|fr_ago }}</td>
+          </tr>
+          <tr>
+            <th>État</th>
+            <td>
+              {% if order['status'] == 'done' %}
+                <span class="badge badge-ok">Terminée</span>
+              {% else %}
+                <span class="badge badge-warn">À traiter</span>
+              {% endif %}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="step">
+      <h2>Filaments à charger</h2>
+      {% set colors = order['colors_json']|order_colors %}
+      {% if colors %}
+        <div class="stack">
+          {% for c in colors %}
+            <div class="filament-row">
+              <span class="color-dot" style="background:{{ c['hex'] }}"></span>
+              <span class="filament-name">{{ c['name'] }}</span>
+              <span class="badge">{{ c['role'] }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="hint">Aucune couleur enregistrée (commande passée avant cette fonctionnalité).</p>
+      {% endif %}
+    </section>
+
+    <section class="step">
+      <h2>Actions</h2>
+      {% if has_file %}
+        <a class="btn btn-primary btn-block" href="{{ url_for('admin_download_order', code=order['code']) }}">
+          ⬇ Télécharger le 3MF
+        </a>
+      {% else %}
+        <p class="hint error">Le fichier de cette commande est introuvable sur le disque.</p>
+      {% endif %}
+      {% if order['status'] != 'done' %}
+        <form method="post" action="{{ url_for('admin_complete_order', code=order['code']) }}"
+              style="margin-top:10px"
+              onsubmit="return confirm('Marquer la commande {{ order['code'] }} comme terminée ?');">
+          <input type="hidden" name="next" value="{{ url_for('admin_orders') }}">
+          <button type="submit" class="btn btn-ok btn-block">✓ Marquer comme terminée</button>
+        </form>
+      {% endif %}
+      <p class="hint" style="margin-top:12px">
+        L'aperçu montre le fichier tel qu'il sera imprimé : chaque objet avec
+        le filament choisi par le client.
+      </p>
+    </section>
+  </aside>
+
+  <div class="viewer-wrap">
+    <div id="viewer"></div>
+    <div id="viewer-hint" class="viewer-hint">Chargement de l'aperçu…</div>
+    <div class="viewer-tools">
+      <button type="button" class="icon-btn" id="view-reset" title="Recentrer la vue" aria-label="Recentrer la vue">⟳</button>
+      <button type="button" class="icon-btn" id="view-full" title="Plein écran" aria-label="Plein écran">⛶</button>
+    </div>
+  </div>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script type="module" src="{{ url_for('static', filename='js/order_preview.js') }}"></script>
+{% endblock %}

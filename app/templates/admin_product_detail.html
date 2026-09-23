@@ -56,7 +56,9 @@
           <tbody>
             {% for o in orders %}
             <tr>
-              <td><code>{{ o['code'] }}</code></td>
+              <td>
+                <a href="{{ url_for('admin_order_detail', code=o['code']) }}"><code>{{ o['code'] }}</code></a>
+              </td>
               <td class="muted" title="{{ o['created_at']|fr_datetime }}">{{ o['created_at']|fr_ago }}</td>
               <td>
                 {% set colors = o['colors_json']|order_colors %}
@@ -72,6 +74,7 @@
                 {% endif %}
               </td>
               <td class="actions">
+                <a class="btn btn-soft btn-sm" href="{{ url_for('admin_order_detail', code=o['code']) }}">👁 Aperçu</a>
                 <a class="btn btn-soft btn-sm" href="{{ url_for('admin_download_order', code=o['code']) }}">⬇ 3MF</a>
                 <form method="post" action="{{ url_for('admin_complete_order', code=o['code']) }}"
                       onsubmit="return confirm('Marquer la commande {{ o['code'] }} comme terminée ? Elle disparaîtra de cette liste.');">

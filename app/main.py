@@ -13,9 +13,12 @@ import io
 import json
 import logging
 import os
+import re
 import shutil
+import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from flask import (Flask, abort, flash, jsonify, redirect, render_template,
                     request, send_file, session, url_for)
@@ -27,7 +30,7 @@ from . import config, db, meshwork as mw, orders, store
 
 _HTML_ENDPOINTS = {"login", "logout", "gallery", "tool", "admin_home", "admin_new_product",
                     "admin_edit_product", "admin_product_detail", "admin_orders",
-                    "customer_order"}
+                    "admin_order_detail", "customer_order"}
 
 logging.basicConfig(level=logging.INFO,
                      format="%(asctime)s %(levelname)s %(name)s | %(message)s")
@@ -114,6 +117,15 @@ def order_colors_filter(value) -> list[dict]:
             out.append({"hex": entry["hex"], "name": entry.get("name") or entry["hex"],
                          "role": "Logo"})
     return out
+
+
+def _slug(text: str, fallback: str = "objet") -> str:
+    """A filename-safe version of a product/model name: 'Mug personnalisé'
+    -> 'mug-personnalise'. A download called autologo.3mf tells you nothing
+    once ten of them sit in the same folder."""
+    plain = unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode()
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", plain).strip("-").lower()
+    return slug[:60] or fallback
 
 
 def _product_swatch(product) -> str:
@@ -282,8 +294,42 @@ def admin_download_order(code):
     order = db.get_order(code)
     if order is None or not order["output_path"] or not os.path.exists(order["output_path"]):
         abort(404, "commande introuvable")
+    product = db.get_product(order["product_id"])
+    name = _slug(product["name"] if product else "commande")
     return send_file(order["output_path"], mimetype="model/3mf",
-                      as_attachment=True, download_name=f"commande_{code}.3mf")
+                      as_attachment=True, download_name=f"{name}_{code}.3mf")
+
+
+@app.route("/admin/orders/<code>")
+@login_required
+def admin_order_detail(code):
+    order = db.get_order(code)
+    if order is None:
+        abort(404, "commande introuvable")
+    product = db.get_product(order["product_id"])
+    has_file = bool(order["output_path"]) and os.path.exists(order["output_path"])
+    return render_template("admin_order.html", order=order, product=product,
+                            has_file=has_file)
+
+
+@app.route("/admin/orders/<code>/preview.glb")
+@login_required
+def admin_order_preview(code):
+    """The ordered 3MF as a GLB, so the admin page can show what the
+    customer actually configured — filament colors included. Built once and
+    cached next to the order, since the 3MF never changes after submission."""
+    order = db.get_order(code)
+    if order is None or not order["output_path"] or not os.path.exists(order["output_path"]):
+        abort(404, "commande introuvable")
+    source = Path(order["output_path"])
+    cached = source.with_name("preview.glb")
+    if not cached.exists() or cached.stat().st_mtime < source.stat().st_mtime:
+        try:
+            cached.write_bytes(mw.scene_to_glb(str(source)))
+        except Exception as exc:
+            log.exception("aperçu impossible pour la commande %s", code)
+            return _err(mw.MeshError(f"aperçu impossible: {exc}"), 500)
+    return send_file(str(cached), mimetype="model/gltf-binary", max_age=3600)
 
 
 @app.route("/admin/orders/<code>/done", methods=["POST"])
@@ -358,6 +404,7 @@ def upload_model():
 
     sess = store.create()
     sess.model_ext = ext
+    sess.model_name = f.filename
     f.save(str(sess.model_path))
 
     try:
@@ -545,8 +592,9 @@ def export(session_id):
     except mw.MeshError as exc:
         return _err(exc)
 
-    response = send_file(io.BytesIO(data_3mf), mimetype="model/3mf",
-                          as_attachment=True, download_name="autologo.3mf")
+    stem = os.path.splitext(sess.model_name or "")[0]
+    response = send_file(io.BytesIO(data_3mf), mimetype="model/3mf", as_attachment=True,
+                          download_name=f"{_slug(stem, 'autologo')}_logo.3mf")
     # A repaired mesh is not something to hide: the export is a download, so
     # the only channel back to the page is a header.
     if repairs:

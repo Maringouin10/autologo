@@ -215,6 +215,7 @@ wireDropzone(logoDrop, logoInput, async (file) => {
     state.hasLogo = true;
     state.logoShapes = data.shapes;
     state.excluded = new Set();
+    editHistory.length = 0;
     state.flipH = false;
     state.flipV = false;
     document.getElementById("flip-h-btn").classList.remove("active");
@@ -234,6 +235,18 @@ wireDropzone(logoDrop, logoInput, async (file) => {
 // --- logo edit: shape picker, mirror ---------------------------------------------
 // Cards are drawn in the whole logo's frame (see logo-editor.js), so each
 // one shows WHERE its piece sits; the big preview is clickable.
+// Every change is snapshotted first, so "Annuler" can put the previous
+// selection back — cleaning a logo is trial and error.
+const editHistory = [];
+
+function applyEdit(mutate) {
+  editHistory.push(new Set(state.excluded));
+  if (editHistory.length > 30) editHistory.shift();
+  mutate();
+  renderEditor();
+  syncLogoEdit();
+}
+
 function renderEditor() {
   renderLogoEditor({
     listHost: document.getElementById("shape-list"),
@@ -242,14 +255,24 @@ function renderEditor() {
     excluded: state.excluded,
     flipH: state.flipH,
     flipV: state.flipV,
-    onToggle: (index, included) => {
+    canUndo: editHistory.length > 0,
+    onToggle: (index, included) => applyEdit(() => {
       if (included) state.excluded.delete(index);
       else state.excluded.add(index);
-      renderEditor();
-      syncLogoEdit();
-    },
-    onSetAll: (included) => {
+    }),
+    onSetAll: (included) => applyEdit(() => {
       state.excluded = included ? new Set() : new Set(state.logoShapes.map((s) => s.index));
+    }),
+    onSetMany: (indices, included) => applyEdit(() => {
+      for (const index of indices) {
+        if (included) state.excluded.delete(index);
+        else state.excluded.add(index);
+      }
+    }),
+    onUndo: () => {
+      const previous = editHistory.pop();
+      if (!previous) return;
+      state.excluded = previous;
       renderEditor();
       syncLogoEdit();
     },

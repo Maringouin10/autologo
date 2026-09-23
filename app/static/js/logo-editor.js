@@ -44,11 +44,14 @@ export function looksLikeBackground(shape, shapes) {
   if (shapes.length < 2) return false;
   const frame = logoFrame(shapes);
   const [x0, y0, x1, y1] = shape.bbox;
-  const coversWidth = (x1 - x0) >= frame.w * 0.92;
-  const coversHeight = (y1 - y0) >= frame.h * 0.92;
-  if (!coversWidth || !coversHeight) return false;
-  // A frame/outline ring covers the same box but only fills its border, so
-  // require it to be solid before calling it a background.
+  if ((x1 - x0) < frame.w * 0.92 || (y1 - y0) < frame.h * 0.92) return false;
+  // Painted first and spanning the whole artwork is what a background plate
+  // *is* — and since overlaps are flattened server-side, such a plate now
+  // arrives punched full of holes by the shapes above it, so its own area no
+  // longer gives it away.
+  const bottom = Math.min(...shapes.map((s) => s.index));
+  if (shape.index === bottom) return true;
+  // Otherwise still catch a solid slab that covers everything.
   const boxArea = Math.max((x1 - x0) * (y1 - y0), 1e-9);
   return (shape.area ?? 0) >= boxArea * 0.75;
 }
@@ -85,6 +88,26 @@ function highlight(previewHost, index) {
   });
 }
 
+/** A piece so small next to the rest it is almost certainly a leftover
+ * speck: a stray anchor point, a dust dot from a scan, a comma of a
+ * signature. Cleaning those one checkbox at a time is the slowest part of
+ * preparing a logo. */
+function isCrumb(shape, shapes) {
+  if (shapes.length < 3) return false;
+  const biggest = Math.max(...shapes.map((s) => s.area ?? 0));
+  if (!(biggest > 0)) return false;
+  return (shape.area ?? 0) <= biggest * 0.004;
+}
+
+/** What the editor can offer to do in one click, given what is on screen. */
+export function suggestions(shapes, excluded) {
+  const live = shapes.filter((s) => !excluded.has(s.index));
+  return {
+    background: live.filter((s) => looksLikeBackground(s, shapes)).map((s) => s.index),
+    crumbs: live.filter((s) => isCrumb(s, shapes)).map((s) => s.index),
+  };
+}
+
 /**
  * Render the whole edit step.
  *
@@ -94,7 +117,8 @@ function highlight(previewHost, index) {
  */
 export function renderLogoEditor({
   listHost, previewHost, shapes, excluded, flipH = false, flipV = false,
-  colorOf = (s) => s.color || "#36d17a", onToggle, onSetAll,
+  colorOf = (s) => s.color || "#36d17a", onToggle, onSetAll, onSetMany,
+  onUndo, canUndo = false,
 }) {
   if (!listHost) return;
   if (!shapes.length) {
@@ -106,10 +130,26 @@ export function renderLogoEditor({
   const kept = shapes.filter((s) => !excluded.has(s.index)).length;
 
   // --- the card grid, with its own little toolbar ---
+  // One-click cleanups, offered only when they apply: on a typical logo
+  // this turns "hunt through the thumbnails" into one or two clicks.
+  const hints = suggestions(shapes, excluded);
+  const quick = [];
+  if (hints.background.length) {
+    quick.push({ label: "✕ Retirer le fond", indices: hints.background, kind: "warn" });
+  }
+  if (hints.crumbs.length) {
+    quick.push({
+      label: `✕ Retirer ${hints.crumbs.length} miette${hints.crumbs.length > 1 ? "s" : ""}`,
+      indices: hints.crumbs, kind: "warn",
+    });
+  }
+
   listHost.innerHTML = `
+    <div class="shape-quick"></div>
     <div class="shape-tools">
       <span class="shape-count"></span>
       <span class="spacer"></span>
+      <button type="button" class="shape-tool" data-undo="1">↶ Annuler</button>
       <button type="button" class="shape-tool" data-all="1">Tout inclure</button>
       <button type="button" class="shape-tool" data-all="0">Tout exclure</button>
     </div>
@@ -118,9 +158,26 @@ export function renderLogoEditor({
   listHost.querySelector(".shape-count").textContent = shapes.length > 1
     ? `${kept}/${shapes.length} formes incluses`
     : `${kept}/1 forme incluse`;
-  listHost.querySelectorAll(".shape-tool").forEach((btn) => {
+  listHost.querySelectorAll(".shape-tool[data-all]").forEach((btn) => {
     btn.addEventListener("click", () => onSetAll?.(btn.dataset.all === "1"));
   });
+  const undoBtn = listHost.querySelector('.shape-tool[data-undo]');
+  undoBtn.disabled = !canUndo;
+  undoBtn.addEventListener("click", () => onUndo?.());
+
+  const quickHost = listHost.querySelector(".shape-quick");
+  if (!quick.length) {
+    quickHost.remove();
+  } else {
+    for (const action of quick) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `shape-suggest shape-suggest-${action.kind}`;
+      btn.textContent = action.label;
+      btn.addEventListener("click", () => onSetMany?.(action.indices, false));
+      quickHost.appendChild(btn);
+    }
+  }
 
   const grid = listHost.querySelector(".shape-list");
   for (const shape of shapes) {
@@ -132,7 +189,9 @@ export function renderLogoEditor({
       `<input type="checkbox" ${off ? "" : "checked"}>` +
       (looksLikeBackground(shape, shapes)
         ? '<span class="shape-flag" title="Cette forme couvre tout le logo — souvent un fond à exclure.">fond&nbsp;?</span>'
-        : "") +
+        : isCrumb(shape, shapes)
+          ? '<span class="shape-flag" title="Forme minuscule — souvent un résidu du tracé.">miette</span>'
+          : "") +
       `</span>` + cardSvg(shape, shapes, colorOf);
     card.querySelector("input").addEventListener("change", (e) => {
       onToggle?.(shape.index, e.target.checked);

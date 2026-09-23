@@ -26,6 +26,7 @@ from trimesh import repair
 from shapely import affinity
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry import box as shapely_box
+from shapely import STRtree
 from shapely.ops import unary_union
 
 # Faces are grouped into a "flat region" when their normals agree within this
@@ -135,6 +136,34 @@ def part_for_face(parts: list[dict], face_index: int) -> dict:
 
 def to_glb(mesh: trimesh.Trimesh) -> bytes:
     return mesh.export(file_type="glb")
+
+
+def scene_to_glb(path: str) -> bytes:
+    """A finished 3MF as a single GLB the browser can display, each object
+    painted with the filament color the file assigns it — what the vendor
+    needs to see before sending an order to the printer.
+
+    Per-VERTEX colors, as everywhere else here: trimesh converts face colors
+    lazily through scipy.sparse, which this image deliberately doesn't
+    carry."""
+    loaded = trimesh.load(path, process=False)
+    geometries = (loaded.geometry if isinstance(loaded, trimesh.Scene)
+                   else {"piece": loaded})
+    colors = extract_3mf_colors(path)
+
+    meshes = []
+    for name, geometry in geometries.items():
+        if not isinstance(geometry, trimesh.Trimesh) or len(geometry.faces) == 0:
+            continue
+        mesh = geometry.copy()
+        rgb = colors.get(name, DEFAULT_PART_COLOR)
+        mesh.visual.vertex_colors = np.tile(
+            np.array([*rgb, 255], dtype=np.uint8), (len(mesh.vertices), 1))
+        meshes.append(mesh)
+    if not meshes:
+        raise MeshError("ce fichier 3MF ne contient aucune géométrie affichable")
+    combined = trimesh.util.concatenate(meshes) if len(meshes) > 1 else meshes[0]
+    return combined.export(file_type="glb")
 
 
 _3MF_CORE_NS = "{http://schemas.microsoft.com/3dmanufacturing/core/2015/02}"
@@ -545,6 +574,48 @@ def _hex_to_rgb(h: str) -> tuple[int, int, int]:
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
+def _flatten_overlaps(shapes: list) -> list:
+    """Make the shapes cover the artwork the way it is actually drawn.
+
+    SVG paints in document order: a shape hides whatever earlier shapes sit
+    under it. We extrude every shape as its own solid, so an overlap used to
+    produce two solids in the same place — two surfaces at the same height,
+    which is why the 3D view showed both colors fighting over the same spot
+    (and why a slicer would get two filaments claiming the same volume).
+
+    Each shape therefore keeps only the part no later shape covers, exactly
+    like a renderer. A shape that ends up completely hidden disappears (it
+    was invisible in the SVG too), and one cut into separate pieces becomes
+    separate shapes — which is what it really is once printed."""
+    if len(shapes) < 2:
+        return shapes
+
+    polygons = [s.polygon for s in shapes]
+    try:
+        tree = STRtree(polygons)
+    except Exception:
+        return shapes
+
+    out: list[LogoShape] = []
+    for i, shape in enumerate(shapes):
+        # Only shapes drawn later can hide this one; the tree narrows that to
+        # the ones whose bounding box actually meets it.
+        try:
+            above = [j for j in tree.query(shape.polygon) if int(j) > i]
+        except Exception:
+            above = [j for j in range(i + 1, len(shapes))]
+        visible = shape.polygon
+        if above:
+            try:
+                visible = shape.polygon.difference(unary_union([polygons[int(j)] for j in above]))
+            except Exception:
+                visible = shape.polygon
+        for part in getattr(visible, "geoms", [visible]):
+            if getattr(part, "geom_type", "") == "Polygon" and _is_usable_polygon(part):
+                out.append(LogoShape(part, shape.color))
+    return out or shapes
+
+
 def _cap_colors(shapes: list) -> list:
     """Keep at most MAX_LOGO_COLORS distinct colors, chosen by how much
     area each covers; every other shape is re-tagged to whichever kept
@@ -627,6 +698,7 @@ def load_logo(path: str) -> list:
             polys = [poly for poly in polys if _is_usable_polygon(poly)]
         shapes.extend(LogoShape(p, color) for p in polys)
 
+    shapes = _flatten_overlaps(shapes)
     if not shapes:
         if failures:
             raise MeshError(

@@ -27,6 +27,7 @@ class Session:
     dir: Path
     created_at: float = field(default_factory=time.time)
     model_ext: str | None = None
+    model_name: str | None = None   # the uploaded file's own name, for the export's filename
     logo_name: str | None = None
     # set True *before* the first mesh() call to load the model as a
     # multi-part assembly (vendor's product-zone builder) instead of a

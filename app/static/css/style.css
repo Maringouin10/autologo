@@ -735,13 +735,14 @@ input[type=range]::-moz-range-thumb {
 
 /* --- logo edit step ------------------------------------------------------ */
 .shape-tools {
-  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;
   font-size: 0.78rem; color: var(--muted);
 }
+.shape-tools .shape-count { flex: 1 0 100%; }
 .shape-tool {
   border: 1px solid var(--border); background: var(--bg-deep); color: var(--text-dim);
-  font: inherit; font-size: 0.75rem; padding: 4px 9px; border-radius: 999px; cursor: pointer;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  font: inherit; font-size: 0.75rem; padding: 5px 10px; border-radius: 999px; cursor: pointer;
+  white-space: nowrap; transition: border-color 0.15s, color 0.15s, background 0.15s;
 }
 .shape-tool:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 
@@ -772,3 +773,30 @@ input[type=range]::-moz-range-thumb {
   background: rgba(255, 198, 92, 0.1); border: 1px solid rgba(255, 198, 92, 0.3);
   color: var(--text-dim); border-radius: var(--r-sm); padding: 9px 11px; margin: 0 0 12px;
 }
+
+/* --- admin order preview -------------------------------------------------- */
+.order-facts th {
+  text-transform: none; letter-spacing: 0; font-size: 0.8rem;
+  padding: 8px 10px 8px 0; border-bottom: 1px solid var(--border-soft);
+  width: 40%; vertical-align: middle;
+}
+.order-facts td { padding-left: 0; }
+.filament-row {
+  display: flex; align-items: center; gap: 9px; padding: 8px 10px;
+  border: 1px solid var(--border-soft); border-radius: var(--r-sm); background: var(--bg-deep);
+}
+.filament-row .color-dot { width: 18px; height: 18px; }
+.filament-name { font-size: 0.87rem; font-weight: 550; }
+.filament-row .badge { margin-left: auto; }
+
+/* --- one-click cleanups in the logo editor -------------------------------- */
+.shape-quick { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 9px; }
+.shape-suggest {
+  font: inherit; font-size: 0.78rem; font-weight: 600; cursor: pointer;
+  padding: 6px 11px; border-radius: 999px;
+  background: rgba(255, 198, 92, 0.12); border: 1px solid rgba(255, 198, 92, 0.4);
+  color: var(--warn); transition: background 0.15s, transform 0.12s var(--ease);
+}
+.shape-suggest:hover { background: rgba(255, 198, 92, 0.22); }
+.shape-suggest:active { transform: translateY(1px); }
+.shape-tool:disabled { opacity: 0.35; cursor: not-allowed; }

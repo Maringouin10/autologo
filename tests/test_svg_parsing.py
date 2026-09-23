@@ -123,6 +123,59 @@ class UseTests(unittest.TestCase):
         self.assertEqual(len(shapes), 1)
 
 
+class OverlapTests(unittest.TestCase):
+    """SVG paints in document order, so a shape hides what is under it. Two
+    solids in the same place made the 3D view show both colors at once and
+    would have handed a slicer two filaments for one volume."""
+
+    def areas(self, shapes):
+        return sorted(round(s.polygon.area, 2) for s in shapes)
+
+    def test_shapes_no_longer_overlap(self):
+        shapes = shapes_of(SVG.format(
+            '<rect x="0" y="0" width="100" height="100" fill="#ffffff"/>'
+            '<rect x="10" y="10" width="40" height="40" fill="#ff0000"/>'
+            '<rect x="30" y="10" width="40" height="40" fill="#0000ff"/>'))
+        for i in range(len(shapes)):
+            for j in range(i + 1, len(shapes)):
+                overlap = shapes[i].polygon.intersection(shapes[j].polygon).area
+                self.assertAlmostEqual(overlap, 0.0, places=6)
+
+    def test_total_area_equals_what_is_visible(self):
+        shapes = shapes_of(SVG.format(
+            '<rect x="0" y="0" width="100" height="100" fill="#ffffff"/>'
+            '<rect x="10" y="10" width="40" height="40" fill="#ff0000"/>'))
+        self.assertAlmostEqual(sum(s.polygon.area for s in shapes), 100 * 100, places=3)
+
+    def test_the_top_shape_keeps_all_of_itself(self):
+        shapes = shapes_of(SVG.format(
+            '<rect x="0" y="0" width="40" height="40" fill="#ff0000"/>'
+            '<rect x="20" y="20" width="40" height="40" fill="#0000ff"/>'))
+        by_color = {s.color: s.polygon.area for s in shapes}
+        self.assertAlmostEqual(by_color["#0000ff"], 1600.0, places=3)
+        self.assertAlmostEqual(by_color["#ff0000"], 1600.0 - 400.0, places=3)
+
+    def test_a_fully_hidden_shape_disappears(self):
+        shapes = shapes_of(SVG.format(
+            '<rect x="10" y="10" width="20" height="20" fill="#ff0000"/>'
+            '<rect x="0" y="0" width="100" height="100" fill="#0000ff"/>'))
+        self.assertEqual([s.color for s in shapes], ["#0000ff"])
+
+    def test_a_shape_cut_in_two_becomes_two_pieces(self):
+        shapes = shapes_of(SVG.format(
+            '<rect x="0" y="0" width="100" height="20" fill="#ff0000"/>'
+            '<rect x="40" y="-5" width="20" height="30" fill="#0000ff"/>'))
+        reds = [s for s in shapes if s.color == "#ff0000"]
+        self.assertEqual(len(reds), 2)
+        self.assertAlmostEqual(sum(r.polygon.area for r in reds), 100 * 20 - 20 * 20, places=3)
+
+    def test_touching_shapes_are_left_alone(self):
+        shapes = shapes_of(SVG.format(
+            '<rect x="0" y="0" width="20" height="20" fill="#ff0000"/>'
+            '<rect x="20" y="0" width="20" height="20" fill="#0000ff"/>'))
+        self.assertEqual(self.areas(shapes), [400.0, 400.0])
+
+
 class ColorTests(unittest.TestCase):
     def test_css_class_fill_survives_nested_transforms(self):
         shapes = shapes_of(SVG.format(

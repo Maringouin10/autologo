@@ -476,6 +476,7 @@ function makeControls(groupEngines, { title, compact = false }) {
       markDropzoneFilled(drop, file.name, `${data.shapes.length} forme(s) — cliquez pour changer`);
       // A new logo brings its own colors: keep the customer's picks for the
       // colors that are still there, drop the ones that are gone.
+      editHistory.length = 0;
       pruneColorMap();
       adoptDefaultColors();
       renderEditor();
@@ -504,6 +505,16 @@ function makeControls(groupEngines, { title, compact = false }) {
     for (const engine of ctl.engines) mutate(engine);
   }
 
+  const editHistory = [];
+
+  function applyEdit(mutate) {
+    editHistory.push(new Set(lead.excluded));
+    if (editHistory.length > 30) editHistory.shift();
+    setExcluded(mutate);
+    renderEditor();
+    syncEdit();
+  }
+
   function renderEditor() {
     renderLogoEditor({
       listHost: el.querySelector(".zone-shape-list"),
@@ -512,21 +523,27 @@ function makeControls(groupEngines, { title, compact = false }) {
       excluded: lead.excluded,
       flipH: lead.flipH,
       flipV: lead.flipV,
+      canUndo: editHistory.length > 0,
       // The customer picks the filament each SVG color prints in — the
       // cards and the preview show that, not the original artwork color.
       colorOf: (shape) => printedColor(shape.color),
-      onToggle: (index, included) => {
-        setExcluded((engine) => {
+      onToggle: (index, included) => applyEdit((engine) => {
+        if (included) engine.excluded.delete(index);
+        else engine.excluded.add(index);
+      }),
+      onSetAll: (included) => applyEdit((engine) => {
+        engine.excluded = included ? new Set() : new Set(lead.shapes.map((s) => s.index));
+      }),
+      onSetMany: (indices, included) => applyEdit((engine) => {
+        for (const index of indices) {
           if (included) engine.excluded.delete(index);
           else engine.excluded.add(index);
-        });
-        renderEditor();
-        syncEdit();
-      },
-      onSetAll: (included) => {
-        setExcluded((engine) => {
-          engine.excluded = included ? new Set() : new Set(lead.shapes.map((s) => s.index));
-        });
+        }
+      }),
+      onUndo: () => {
+        const previous = editHistory.pop();
+        if (!previous) return;
+        setExcluded((engine) => { engine.excluded = new Set(previous); });
         renderEditor();
         syncEdit();
       },
