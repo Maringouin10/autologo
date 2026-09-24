@@ -24,10 +24,11 @@ import numpy as np
 import trimesh
 from trimesh import repair
 from shapely import affinity
+from shapely.geometry import Point as ShapelyPoint
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry import box as shapely_box
 from shapely import STRtree
-from shapely.ops import unary_union
+from shapely.ops import polylabel, unary_union
 
 # Faces are grouped into a "flat region" when their normals agree within this
 # angle and they sit on (approximately) the same plane as the clicked face.
@@ -816,8 +817,47 @@ def _outline_polygon(face: "FaceInfo") -> ShapelyPolygon:
     return shapely_box(-face.width / 2.0, -face.height / 2.0, face.width / 2.0, face.height / 2.0)
 
 
+def inscribed_circle(face: "FaceInfo") -> tuple[float, float, float]:
+    """(u, v, radius) of the largest circle that fits inside the flat
+    region, in millimetres from the region's own origin.
+
+    The origin is the centre of the region's *bounding box*, which is not
+    where you want a logo on a shape with a sticking-out bit: on a keyring
+    the box spans the disc AND its little hanging tab, so "centred" lands
+    the logo above the middle of the disc. The pole of inaccessibility —
+    the point furthest from any edge — is the middle of the disc, which is
+    what a person means by "centre it on the piece". It behaves the same way
+    on a rectangle with a lug, and on an L-shape it finds the middle of the
+    widest part."""
+    region = _outline_polygon(face)
+    size = max(face.width, face.height, 1.0)
+    try:
+        point = polylabel(region, tolerance=max(size / 2000.0, 0.01))
+        u, v = float(point.x), float(point.y)
+    except Exception:
+        # polylabel gives up on odd geometry; shrinking the region until it
+        # vanishes finds the same point, just slower.
+        lo, hi, last = 0.0, size, None
+        for _ in range(24):
+            mid = (lo + hi) / 2.0
+            shrunk = region.buffer(-mid)
+            if shrunk.is_empty:
+                hi = mid
+            else:
+                lo, last = mid, shrunk
+        if last is None:
+            return 0.0, 0.0, 0.0
+        point = last.representative_point()
+        u, v = float(point.x), float(point.y)
+
+    boundaries = [region.exterior, *region.interiors]
+    radius = min(float(b.distance(ShapelyPoint(u, v))) for b in boundaries)
+    return round(u, 3), round(v, 3), round(radius, 3)
+
+
 def fit_to_face(shapes: list, face: "FaceInfo", margin_mm: float = 1.0,
-                 rotation_deg: float | None = None) -> tuple[float, float]:
+                 rotation_deg: float | None = None,
+                 center: tuple[float, float] = (0.0, 0.0)) -> tuple[float, float]:
     """Largest (width_mm, rotation_deg), logo centered on the face's own
     origin, that fits entirely *inside the face's actual shape* — not its
     bounding box, which overestimates the available space on anything
@@ -845,6 +885,8 @@ def fit_to_face(shapes: list, face: "FaceInfo", margin_mm: float = 1.0,
             return True
         shape = affinity.rotate(centered, theta_deg, origin=(0, 0))
         shape = affinity.scale(shape, xfact=scale, yfact=scale, origin=(0, 0))
+        if center != (0.0, 0.0):
+            shape = affinity.translate(shape, xoff=center[0], yoff=center[1])
         return usable.contains(shape)
 
     ubx0, uby0, ubx1, uby1 = usable.bounds
@@ -906,6 +948,12 @@ class FaceInfo:
             "face_count": self.face_count,
             "outline": self.outline,
         }
+
+    def centering_offset(self) -> dict:
+        """Where to put a logo so it sits in the middle of the piece itself
+        rather than the middle of its bounding box (see inscribed_circle)."""
+        u, v, radius = inscribed_circle(self)
+        return {"x": u, "y": v, "radius": radius}
 
     @classmethod
     def from_json(cls, data: dict) -> "FaceInfo":

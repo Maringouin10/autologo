@@ -816,3 +816,13 @@ input[type=range]::-moz-range-thumb {
 .rot-presets button.active {
   background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 650;
 }
+
+/* --- product thumbnails ---------------------------------------------------- */
+/* The rendered PNG sits on top of the color swatch, which stays visible as
+   the placeholder until (or unless) the render lands. */
+.gallery-swatch {
+  background-size: cover; background-position: center; background-repeat: no-repeat;
+  transition: background-image 0.2s;
+}
+.gallery-swatch.has-shot::after { opacity: 0.45; }
+.gallery-card:hover .gallery-swatch.has-shot { filter: brightness(1.06); }

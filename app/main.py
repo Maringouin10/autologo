@@ -377,6 +377,16 @@ def _keep_rotation(data: dict) -> float | None:
         return None
 
 
+def _fit_center(data: dict) -> tuple[float, float]:
+    """Where the fit should grow from: the logo's current offsets, so
+    filling the plate keeps it where the customer put it (dragged, or
+    centred on the piece) instead of snapping back to the middle."""
+    try:
+        return (float(data.get("offset_x_mm") or 0.0), float(data.get("offset_y_mm") or 0.0))
+    except (TypeError, ValueError):
+        return (0.0, 0.0)
+
+
 def _placement_params(data: dict) -> mw.PlacementParams:
     return mw.PlacementParams(
         width_mm=max(1.0, float(data.get("width_mm", 20.0))),
@@ -508,7 +518,8 @@ def fit_logo(session_id):
     try:
         info = mw.find_flat_region(sess.mesh(), sess.face_adjacency(), face_index)
         width_mm, rotation_deg = mw.fit_to_face(sess.active_logo_polygons(), info,
-                                                 rotation_deg=_keep_rotation(data))
+                                                 rotation_deg=_keep_rotation(data),
+                                                 center=_fit_center(data))
     except mw.MeshError as exc:
         return _err(exc)
     return jsonify({"width_mm": width_mm, "rotation_deg": rotation_deg})
@@ -542,6 +553,7 @@ def select_face(session_id):
     result = info.to_json()
     result["face_index"] = face_index
     result["suggested_width_mm"] = round(min(info.width, info.height) * 0.7, 1)
+    result["center"] = info.centering_offset()
     return jsonify(result)
 
 
@@ -669,6 +681,7 @@ def admin_select_face(session_id):
     result["face_index"] = face_index
     result["part_name"] = part["name"]
     result["part_is_volume"] = _part_is_volume(sess, part)
+    result["center"] = info.centering_offset()
     return jsonify(result)
 
 
@@ -837,8 +850,12 @@ def _zone_public(z) -> dict:
     plane-intersection math the single-tool page does) — never `mode`,
     `depth_mm`, `sink_mm` or `fill_extra_mm`, which stay vendor-locked."""
     face = json.loads(z["face_json"])
+    info = mw.FaceInfo.from_json(face)
     return {
         "id": z["id"], "label": z["label"],
+        # Where to sit to be centred on the piece itself rather than on its
+        # bounding box — a keyring's disc, not disc-plus-tab.
+        "center": info.centering_offset(),
         "group_key": z["group_key"] if "group_key" in z.keys() else "",
         "width": face["width"], "height": face["height"],
         "origin": face["origin"], "normal": face["normal"],
@@ -1027,7 +1044,8 @@ def order_fit(order_session_id, zone_id):
     try:
         face = orders.zone_face(zone_row, db.get_product(sess.product_id))
         width_mm, rotation_deg = mw.fit_to_face(work.printed_polygons(), face,
-                                                 rotation_deg=_keep_rotation(data))
+                                                 rotation_deg=_keep_rotation(data),
+                                                 center=_fit_center(data))
     except mw.MeshError as exc:
         return _err(exc)
     return jsonify({"width_mm": width_mm, "rotation_deg": rotation_deg})

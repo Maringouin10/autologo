@@ -150,6 +150,7 @@ const state = {
   faceIndex: null,
   hasLogo: false,
   faceInfo: null,
+  faceCenter: null,   // where "centred on the piece" puts the logo, in mm
   logoShapes: [],
   isVolume: true,
   excluded: new Set(),
@@ -402,7 +403,12 @@ async function fitToPlate(btn, keepRotation) {
   setError("");
   btn.disabled = true;
   try {
-    const body = { face_index: state.faceIndex };
+    const body = {
+      face_index: state.faceIndex,
+      // grow around where the logo sits now, rather than snapping it back
+      offset_x_mm: parseFloat(sliders.dx.value),
+      offset_y_mm: parseFloat(sliders.dy.value),
+    };
     if (keepRotation) body.rotation_deg = parseFloat(sliders.rot.value);
     const res = await fetch(`/api/session/${state.sessionId}/logo/fit`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -413,8 +419,6 @@ async function fitToPlate(btn, keepRotation) {
     if (data.width_mm > Number(sliders.width.max)) sliders.width.max = data.width_mm;
     sliders.width.value = data.width_mm;
     sliders.rot.value = data.rotation_deg;
-    sliders.dx.value = 0;
-    sliders.dy.value = 0;
     sliders.rot.dispatchEvent(new Event("input", { bubbles: true }));
     schedulePreview();
   } catch (err) {
@@ -430,6 +434,21 @@ document.getElementById("fit-keep-btn").addEventListener("click", (ev) =>
   fitToPlate(ev.currentTarget, true));
 
 wireRotationPresets(document.getElementById("rot-presets"), sliders.rot, schedulePreview);
+
+// --- centre on the piece ------------------------------------------------------
+// The face's origin is the middle of its bounding box, which on a keyring
+// spans the disc AND its tab — so "centred" would sit high. This puts the
+// logo at the middle of the widest part instead.
+document.getElementById("center-btn").addEventListener("click", () => {
+  const center = state.faceCenter;
+  if (!center) return;
+  sliders.dx.value = Math.max(Number(sliders.dx.min), Math.min(Number(sliders.dx.max), center.x));
+  sliders.dy.value = Math.max(Number(sliders.dy.min), Math.min(Number(sliders.dy.max), center.y));
+  schedulePreview();
+  toastOk(center.radius
+    ? `Centré sur la partie large (⌀ ${(center.radius * 2).toFixed(1)} mm disponibles).`
+    : "Centré sur la pièce.");
+});
 
 // --- face picking & drag-to-position ---------------------------------------------
 // Clicking an unpicked area of the model selects the flat face under the
@@ -541,6 +560,7 @@ renderer.domElement.addEventListener("click", async (ev) => {
     if (!res.ok) throw new Error(data.error || "échec de la sélection de face");
     state.faceIndex = data.face_index;
     state.faceInfo = data;
+    state.faceCenter = data.center || null;
     faceOrigin = new THREE.Vector3(...data.origin);
     faceU = new THREE.Vector3(...data.u);
     faceV = new THREE.Vector3(...data.v);

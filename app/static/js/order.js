@@ -237,6 +237,7 @@ function makeEngine(z) {
     width: z.width,
     height: z.height,
     suggestedWidth: z.suggested_width_mm,
+    center: z.center || null,   // middle of the piece itself, not of its bbox
     origin: new THREE.Vector3(...z.origin),
     normal: new THREE.Vector3(...z.normal),
     u: new THREE.Vector3(...z.u),
@@ -286,9 +287,14 @@ function makeEngine(z) {
   };
 
   engine.fit = async (rotationDeg = null) => {
+    const body = {
+      offset_x_mm: engine.placement.offset_x_mm,
+      offset_y_mm: engine.placement.offset_y_mm,
+    };
+    if (rotationDeg !== null) body.rotation_deg = rotationDeg;
     const res = await fetch(`/api/order/session/${SESSION_ID}/zone/${z.id}/fit`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(rotationDeg === null ? {} : { rotation_deg: rotationDeg }),
+      body: JSON.stringify(body),
     });
     const data = await readJson(res);
     if (!res.ok) throw new Error(data.error || "échec de l'ajustement");
@@ -369,6 +375,10 @@ function makeControls(groupEngines, { title, compact = false }) {
           ⤢ Max sans tourner
         </button>
       </div>
+      <button type="button" class="btn btn-soft btn-block zone-center-btn" style="margin-bottom:14px"
+              title="Place le logo au centre de la partie large, sans tenir compte d'une attache ou d'un ergot">
+        ⊙ Centrer sur la pièce
+      </button>
       <div class="field">
         <label>Taille <span class="zone-width-val val"></span></label>
         <input type="range" class="zone-width" min="1" step="0.5">
@@ -624,8 +634,6 @@ function makeControls(groupEngines, { title, compact = false }) {
       if (data.width_mm > Number(sliders.width.max)) sliders.width.max = data.width_mm;
       sliders.width.value = data.width_mm;
       sliders.rot.value = data.rotation_deg;
-      sliders.dx.value = 0;
-      sliders.dy.value = 0;
       sliders.rot.dispatchEvent(new Event("input", { bubbles: true }));
       schedulePreview();
     } catch (err) {
@@ -636,6 +644,22 @@ function makeControls(groupEngines, { title, compact = false }) {
   el.querySelector(".zone-fit-keep-btn").addEventListener("click", () => fitToPlate(true));
 
   wireRotationPresets(el.querySelector(".zone-rot-presets"), sliders.rot, schedulePreview);
+
+  // Centre on the piece itself: the zone's origin is its bounding box's
+  // middle, which on a keyring includes the hanging tab.
+  const centerBtn = el.querySelector(".zone-center-btn");
+  if (!lead.center || (!lead.center.x && !lead.center.y)) {
+    // Nothing to correct on a plain rectangle or disc — don't offer a no-op.
+    centerBtn.remove();
+  } else {
+    centerBtn.addEventListener("click", () => {
+      const clamp = (value, slider) =>
+        Math.max(Number(slider.min), Math.min(Number(slider.max), value));
+      sliders.dx.value = clamp(lead.center.x, sliders.dx);
+      sliders.dy.value = clamp(lead.center.y, sliders.dy);
+      schedulePreview();
+    });
+  }
 
   // --- restore the UI for engines that already carry a logo ---
   if (lead.hasLogo) {

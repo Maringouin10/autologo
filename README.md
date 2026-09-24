@@ -281,6 +281,20 @@ Jinja commun (`app/templates/base.html`).
   dates sont relatives (« il y a 2 h »), l'horodatage exact restant en
   infobulle. Chaque commande affiche les filaments choisis en pastilles.
 
+## Product thumbnails
+
+The gallery cards (and the admin product list) show the **actual piece**,
+not a flat color swatch. There is no server-side renderer here — no GPU,
+and the image stack this container carries can't rasterize a mesh — so the
+cards are rendered in the browser, but *not* one live viewer each: eight
+products would open eight WebGL contexts and browsers start killing the
+oldest at around sixteen. `gallery.js` uses **one** renderer, draws each
+product's GLB in turn, captures it to a PNG and drops it into the card.
+The color swatch stays underneath as the placeholder, so a slow, failed or
+WebGL-less load looks exactly like the page did before. Thumbnails are
+cached per tab in `sessionStorage`, so coming back to the storefront is
+instant.
+
 ## Orders, admin side
 
 - **Every order has its own page** (`/admin/orders/<code>`, reached from the
@@ -323,6 +337,17 @@ Jinja commun (`app/templates/base.html`).
   slider: landing a 0-360 slider exactly on 90 is fiddly, and quarter turns
   are what people reach for. The active one lights up, and moving the
   slider by hand clears it.
+- **⊙ Centrer sur la pièce** puts the logo in the middle of the *piece*,
+  not of the flat region's bounding box. On a keyring that box spans the
+  disc **and** its hanging tab, so "centred" sat visibly high. The button
+  uses the region's pole of inaccessibility (the point furthest from any
+  edge, `meshwork.inscribed_circle`) — the middle of the disc on a keyring,
+  the middle of a rectangle with a lug, the widest part of an L-shape. On a
+  ⌀40 keyring it also lets the logo grow from 19.6 mm to 26.8 mm. The
+  button hides itself on a shape where it would do nothing.
+- Fitting now grows the logo **around where it already sits** rather than
+  snapping it back to the middle, so *centre* then *fill* works, and so
+  does *drag somewhere* then *fill*.
 - **A logo SVG may use up to 3 colors.** Fills are read from `fill`
   attributes, inline `style="fill:…"`, **and `<style>` blocks with class /
   id / element selectors** (how Illustrator, Figma and most "optimized"
