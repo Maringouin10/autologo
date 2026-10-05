@@ -92,6 +92,29 @@
     {% endif %}
   </section>
 
+  {% if parts %}
+  <section class="admin-card">
+    <h2>Pièces du modèle <span class="badge">{{ parts|length }}</span></h2>
+    <p class="card-sub">Chaque pièce telle qu'importée, sans logo ni QR code — pour les imprimer une par une.</p>
+    <div class="table-wrap">
+      <table class="admin-table">
+        <thead><tr><th>Pièce</th><th></th><th class="actions">Actions</th></tr></thead>
+        <tbody>
+          {% for p in parts %}
+          <tr>
+            <td>{{ p['name'] }}</td>
+            <td>{% if p['customized'] %}<span class="badge badge-accent">personnalisable</span>{% endif %}</td>
+            <td class="actions">
+              <a class="btn btn-soft btn-sm" href="{{ url_for('admin_download_part', product_id=product['id'], index=p['index']) }}">⬇ 3MF</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
+
   <section class="admin-card">
     <h2>Zones personnalisables <span class="badge">{{ logo_zones|length }}</span></h2>
     <p class="card-sub">Réglages verrouillés : le client place son logo, mais ne peut pas changer ces paramètres d'impression. Les zones d'un même groupe sont des faces identiques — le client choisit un seul logo pour toutes, ou un par face.</p>

@@ -277,12 +277,54 @@ def admin_product_detail(product_id):
     product = db.get_product(product_id)
     if product is None:
         abort(404, "produit introuvable")
+    zones = db.list_zones(product_id)
     return render_template(
-        "admin_product_detail.html", product=product,
-        zones=db.list_zones(product_id), orders=db.list_orders(product_id),
+        "admin_product_detail.html", product=product, parts=_product_parts(product, zones),
+        zones=zones, orders=db.list_orders(product_id),
         swatch=_product_swatch(product),
         customer_url=url_for("customer_order", product_id=product_id, _external=True),
     )
+
+
+def _load_product_parts(product) -> dict:
+    """{part_name: mesh} of the product's original model, as uploaded."""
+    model_path = config.PRODUCTS_DIR / product["id"] / f"model{product['model_ext']}"
+    if not model_path.exists():
+        raise mw.MeshError("le fichier 3D de ce produit est introuvable")
+    return mw.load_assembly(str(model_path), product["model_ext"])[2]
+
+
+def _product_parts(product, zones) -> list[dict]:
+    """The parts of a product's model, for the admin's per-part downloads.
+    Never worth failing the whole page over: a model that can't be read just
+    shows no parts."""
+    try:
+        names = list(_load_product_parts(product))
+    except mw.MeshError:
+        return []
+    customized = {z["part_name"] for z in zones}
+    return [{"index": i, "name": n, "customized": n in customized} for i, n in enumerate(names)]
+
+
+@app.route("/admin/products/<product_id>/parts/<int:index>/download")
+@login_required
+def admin_download_part(product_id, index):
+    """One piece of the assembly, exactly as uploaded — no logo, no QR."""
+    product = db.get_product(product_id)
+    if product is None:
+        abort(404, "produit introuvable")
+    try:
+        parts = _load_product_parts(product)
+    except mw.MeshError as exc:
+        abort(404, str(exc))
+    names = list(parts)
+    if not 0 <= index < len(names):
+        abort(404, "pièce introuvable")
+    name = names[index]
+    color = orders.product_part_colors(product).get(name)
+    data = mw.export_3mf({name: parts[name]}, {name: color} if color else {})
+    return send_file(io.BytesIO(data), mimetype="model/3mf", as_attachment=True,
+                      download_name=f"{_slug(product['name'])}_{_slug(name, 'piece')}.3mf")
 
 
 @app.route("/admin/products/<product_id>/delete", methods=["POST"])

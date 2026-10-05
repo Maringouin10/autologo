@@ -101,6 +101,14 @@ Error correction is level **M** (15 % recoverable), and `tests/test_qr.py`
 rasterizes the finished 3D relief from above and decodes it back (when OpenCV
 is installed), including rotated/offset placements.
 
+## Downloading the parts one by one
+
+A product's page lists **every part of the model** (« Pièces du modèle »),
+each with a **⬇ 3MF** button: the piece exactly as you uploaded it — no logo,
+no QR code, whatever zones are set up — so you can print the parts of an
+assembly separately. The file is named `<produit>_<pièce>.3mf` and keeps the
+part's own color if your 3MF had one.
+
 ## How the plain tool works
 
 1. **Upload the 3D model.** It's parsed with `trimesh` and converted to glTF
