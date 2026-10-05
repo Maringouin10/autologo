@@ -33,7 +33,13 @@ CREATE TABLE IF NOT EXISTS zones (
     sink_mm       REAL NOT NULL DEFAULT 0.3,
     fill_extra_mm REAL NOT NULL DEFAULT 0.0,
     sort_order    INTEGER NOT NULL DEFAULT 0,
-    group_key     TEXT NOT NULL DEFAULT ''   -- zones sharing one non-empty key are identical faces
+    group_key     TEXT NOT NULL DEFAULT '',  -- zones sharing one non-empty key are identical faces
+    kind          TEXT NOT NULL DEFAULT 'logo',  -- logo (customer places it) | qr (vendor places it)
+    qr_text       TEXT NOT NULL DEFAULT '',      -- qr zones: what the code encodes
+    qr_width_mm   REAL NOT NULL DEFAULT 20.0,    -- qr zones: placement, fixed by the vendor
+    qr_rotation_deg REAL NOT NULL DEFAULT 0.0,
+    qr_offset_x_mm  REAL NOT NULL DEFAULT 0.0,
+    qr_offset_y_mm  REAL NOT NULL DEFAULT 0.0
 );
 CREATE INDEX IF NOT EXISTS idx_zones_product ON zones(product_id);
 
@@ -66,6 +72,12 @@ _MIGRATIONS = {
     "zones": {
         "face_index": "INTEGER NOT NULL DEFAULT -1",
         "group_key": "TEXT NOT NULL DEFAULT ''",
+        "kind": "TEXT NOT NULL DEFAULT 'logo'",
+        "qr_text": "TEXT NOT NULL DEFAULT ''",
+        "qr_width_mm": "REAL NOT NULL DEFAULT 20.0",
+        "qr_rotation_deg": "REAL NOT NULL DEFAULT 0.0",
+        "qr_offset_x_mm": "REAL NOT NULL DEFAULT 0.0",
+        "qr_offset_y_mm": "REAL NOT NULL DEFAULT 0.0",
     },
 }
 
@@ -137,11 +149,14 @@ def replace_zones(product_id: str, zones: list[dict]) -> None:
         for i, z in enumerate(zones):
             conn.execute(
                 "INSERT INTO zones (product_id, part_name, label, face_index, face_json, mode, "
-                "depth_mm, sink_mm, fill_extra_mm, sort_order, group_key) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "depth_mm, sink_mm, fill_extra_mm, sort_order, group_key, kind, qr_text, "
+                "qr_width_mm, qr_rotation_deg, qr_offset_x_mm, qr_offset_y_mm) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (product_id, z["part_name"], z["label"], z["face_index"], z["face_json"],
                  z["mode"], z["depth_mm"], z["sink_mm"], z["fill_extra_mm"], i,
-                 z.get("group_key", "")),
+                 z.get("group_key", ""), z.get("kind", "logo"), z.get("qr_text", ""),
+                 z.get("qr_width_mm", 20.0), z.get("qr_rotation_deg", 0.0),
+                 z.get("qr_offset_x_mm", 0.0), z.get("qr_offset_y_mm", 0.0)),
             )
 
 
@@ -182,17 +197,28 @@ def list_zones(product_id: str) -> list[sqlite3.Row]:
         ).fetchall()
 
 
+def list_logo_zones(product_id: str) -> list[sqlite3.Row]:
+    """The zones a customer places a logo on (everything but the vendor's QR codes)."""
+    return [z for z in list_zones(product_id) if z["kind"] != "qr"]
+
+
+def list_qr_zones(product_id: str) -> list[sqlite3.Row]:
+    return [z for z in list_zones(product_id) if z["kind"] == "qr"]
+
+
 def get_zone(zone_id: int) -> sqlite3.Row | None:
     with get_conn() as conn:
         return conn.execute("SELECT * FROM zones WHERE id = ?", (zone_id,)).fetchone()
 
 
 def count_zones_by_product() -> dict[str, int]:
-    """{product_id: number of zones} in one query — the admin product list
-    shows it for every product at once."""
+    """{product_id: number of customer-facing zones} in one query — the admin
+    product list shows it for every product at once. QR zones are the
+    vendor's own and are not counted."""
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT product_id, COUNT(*) AS n FROM zones GROUP BY product_id").fetchall()
+            "SELECT product_id, COUNT(*) AS n FROM zones WHERE kind != 'qr' "
+            "GROUP BY product_id").fetchall()
     return {r["product_id"]: r["n"] for r in rows}
 
 

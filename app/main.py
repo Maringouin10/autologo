@@ -116,6 +116,10 @@ def order_colors_filter(value) -> list[dict]:
         if isinstance(entry, dict) and entry.get("hex"):
             out.append({"hex": entry["hex"], "name": entry.get("name") or entry["hex"],
                          "role": "Logo"})
+    for entry in data.get("qr") or []:
+        if isinstance(entry, dict) and entry.get("hex"):
+            out.append({"hex": entry["hex"], "name": entry.get("name") or entry["hex"],
+                         "role": "QR code"})
     return out
 
 
@@ -254,6 +258,13 @@ def admin_edit_product(product_id):
         "sink_mm": z["sink_mm"],
         "fill_extra_mm": z["fill_extra_mm"],
         "group_key": z["group_key"],
+        "face_index": z["face_index"],
+        "kind": z["kind"],
+        "qr_text": z["qr_text"],
+        "qr_width_mm": z["qr_width_mm"],
+        "qr_rotation_deg": z["qr_rotation_deg"],
+        "qr_offset_x_mm": z["qr_offset_x_mm"],
+        "qr_offset_y_mm": z["qr_offset_y_mm"],
         "face": json.loads(z["face_json"]),   # the viewer needs it to draw the zone marker
     } for z in db.list_zones(product_id)]
     return render_template("admin_product_form.html", product=product,
@@ -348,8 +359,7 @@ def customer_order(product_id):
     product = db.get_product(product_id)
     if product is None:
         abort(404, "produit introuvable ou lien invalide")
-    zones = db.list_zones(product_id)
-    if not zones:
+    if not db.list_logo_zones(product_id):
         abort(404, "ce produit n'est pas encore prêt (aucune zone configurée)")
     return render_template("order.html", product=product)
 
@@ -685,6 +695,48 @@ def admin_select_face(session_id):
     return jsonify(result)
 
 
+def _qr_request(sess, data: dict):
+    """(qr shapes, flat region, placement) for an admin QR preview/fit call."""
+    try:
+        face_index = int(data["face_index"])
+    except (KeyError, TypeError, ValueError):
+        raise mw.MeshError("face_index manquant/invalide")
+    shapes = mw.qr_shapes(data.get("text", ""))
+    info = mw.find_flat_region(sess.mesh(), sess.face_adjacency(), face_index)
+    return shapes, info
+
+
+@app.route("/api/admin/session/<session_id>/qr/preview", methods=["POST"])
+@login_required
+def admin_qr_preview(session_id):
+    sess = _require_session(session_id)
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        shapes, info = _qr_request(sess, data)
+        params = _placement_params(data)
+    except (TypeError, ValueError) as exc:
+        return _err(ValueError(f"paramètres invalides ({exc})"))
+    except mw.MeshError as exc:
+        return _err(exc)
+    return _mesh_to_glb_response(mw.preview_logo(shapes, info, params))
+
+
+@app.route("/api/admin/session/<session_id>/qr/fit", methods=["POST"])
+@login_required
+def admin_qr_fit(session_id):
+    sess = _require_session(session_id)
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        shapes, info = _qr_request(sess, data)
+        # A QR is square: keep it at a quarter turn rather than letting the
+        # fit tilt it by a few degrees to win a little size.
+        width_mm, rotation_deg = mw.fit_to_face(
+            shapes, info, rotation_deg=_keep_rotation(data) or 0.0, center=_fit_center(data))
+    except mw.MeshError as exc:
+        return _err(exc)
+    return jsonify({"width_mm": width_mm, "rotation_deg": rotation_deg})
+
+
 def _part_is_volume(sess, part) -> bool:
     """Whether this part could be cut as-is. Only informational: deboss
     repairs the mesh at export time (see meshwork.repair_for_boolean)."""
@@ -709,8 +761,9 @@ def admin_create_product():
     if export_mode not in ("assembly", "part"):
         return _err(ValueError("export_mode invalide (assembly|part)"))
     zones_in = data.get("zones") or []
-    if not zones_in:
-        return _err(ValueError("ajoutez au moins une zone avant de publier"))
+    if not any(z.get("kind") != "qr" for z in zones_in):
+        return _err(ValueError("ajoutez au moins une zone de logo avant de publier "
+                                "(un QR code seul ne suffit pas)"))
 
     product_id = uuid.uuid4().hex[:10]
     pdir = config.PRODUCTS_DIR / product_id
@@ -765,9 +818,24 @@ def _build_zones(zones_in: list, sess, existing: dict) -> list[dict]:
             part_name = mw.part_for_face(sess.parts, face_index)["name"]
             face_json = json.dumps(info.to_json())
 
+        kind = "qr" if z.get("kind") == "qr" else "logo"
+        qr = {}
+        if kind == "qr":
+            text = str(z.get("qr_text") or "").strip()
+            mw.qr_shapes(text)   # validates: not empty, not too long, encodable
+            qr = {
+                "qr_text": text,
+                "qr_width_mm": max(3.0, float(z.get("qr_width_mm", 20.0))),
+                "qr_rotation_deg": float(z.get("qr_rotation_deg", 0.0)) % 360.0,
+                "qr_offset_x_mm": float(z.get("qr_offset_x_mm", 0.0)),
+                "qr_offset_y_mm": float(z.get("qr_offset_y_mm", 0.0)),
+            }
+
         out.append({
+            **qr,
+            "kind": kind,
             "part_name": part_name,
-            "label": str(z.get("label") or f"Zone {i + 1}"),
+            "label": str(z.get("label") or (f"QR code {i + 1}" if kind == "qr" else f"Zone {i + 1}")),
             "face_index": face_index,
             "face_json": face_json,
             "mode": mode,
@@ -825,8 +893,8 @@ def admin_update_product(product_id):
     if export_mode not in ("assembly", "part"):
         return _err(ValueError("export_mode invalide (assembly|part)"))
     zones_in = data.get("zones") or []
-    if not zones_in:
-        return _err(ValueError("gardez au moins une zone — sinon le produit "
+    if not any(z.get("kind") != "qr" for z in zones_in):
+        return _err(ValueError("gardez au moins une zone de logo — sinon le produit "
                                 "ne serait plus commandable"))
 
     existing = {z["id"]: z for z in db.list_zones(product_id)}
@@ -876,7 +944,8 @@ def api_product(product_id):
         "name": product["name"],
         "glb_url": url_for("product_glb", product_id=product_id),
         "bounds": json.loads(product["bounds_json"]),
-        "zones": [_zone_public(z) for z in zones],
+        # QR codes are the vendor's: the customer never sees them as a zone.
+        "zones": [_zone_public(z) for z in zones if z["kind"] != "qr"],
         "palette": config.PALETTE,
         "max_colors": config.MAX_PRINT_COLORS,
         # What the object prints in if the customer changes nothing: the

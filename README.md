@@ -70,6 +70,33 @@ products, or **/tool** for the plain single-model tool.
    order code back. Nothing else happens automatically yet (no payment, no
    email) — wire that code into whatever order form/checkout you already use.
 
+## QR codes (placed by the vendor)
+
+A product can carry **QR codes that only you place** — a link to your shop,
+a care-instructions page, a serial number. They are not a customer zone:
+the customer never sees them, can't move or remove them, and every order
+gets them automatically.
+
+In the product editor (step 2), click a flat face, then switch the form from
+**Zone de logo** to **QR code**:
+
+- type the **address or text** to encode (up to 400 characters — the shorter,
+  the bigger and more readable the printed code);
+- set **size**, **rotation** (quarter turns), and **position** with the sliders,
+  or use **⊙ Centrer** / **Agrandir au max** (fits the QR inside the real
+  outline of the face). A live preview shows it on the model;
+- pick **relief** or **gravé** and the depth, exactly as for a logo zone.
+
+Because you place it, none of the customer-side limits apply: it isn't
+counted in `MAX_PRINT_COLORS`, and any number of QR codes can go on any faces.
+The QR is exported as its own object (`<piece>_qr_<zone>_1_<color>`) so the
+slicer can give it its own filament, and the order page lists its color as
+"QR code". A product still needs at least one logo zone to be orderable.
+
+The code uses error correction level **M** (15 % recoverable), and
+`tests/test_qr.py` rasterizes the finished 3D relief from above and decodes it
+back (when OpenCV is installed) — including rotated/offset placements.
+
 ## How the plain tool works
 
 1. **Upload the 3D model.** It's parsed with `trimesh` and converted to glTF

@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 import mapbox_earcut as earcut
 import numpy as np
+import shapely
 import trimesh
 from trimesh import repair
 from shapely import affinity
@@ -711,6 +712,49 @@ def load_logo(path: str) -> list:
             )
         raise MeshError("le SVG ne contient aucune forme fermée exploitable")
     return _cap_colors(shapes)
+
+
+QR_COLOR = "#1c1c1e"
+QR_MAX_CHARS = 400
+
+
+def qr_shapes(text: str, color: str = QR_COLOR) -> list:
+    """A QR code as printable LogoShapes: every dark module merged into
+    solid pieces, centred on the origin, y up, one unit per module.
+
+    Same currency as load_logo (a list of LogoShape), so placing, embossing
+    and engraving a QR is exactly the code path a logo already takes — only
+    where the shapes come from differs. Error correction is 'M' (15%): a
+    printed relief is not as crisp as ink, so the extra redundancy is worth
+    the slightly denser code."""
+    import segno
+    text = (text or "").strip()
+    if not text:
+        raise MeshError("le texte ou l'adresse du QR code est vide")
+    if len(text) > QR_MAX_CHARS:
+        raise MeshError(f"contenu du QR code trop long ({len(text)} caractères, "
+                        f"{QR_MAX_CHARS} au maximum) — un QR dense devient illisible une fois imprimé")
+    try:
+        matrix = segno.make(text, error="m", micro=False).matrix
+    except Exception as exc:
+        raise MeshError(f"impossible de générer le QR code ({exc})") from exc
+
+    n = len(matrix)
+    # Centred up front (half-integers are exact in floating point), rather
+    # than translating the merged result and letting rounding re-pinch it.
+    half = n / 2.0
+    boxes = [shapely_box(c - half, half - 1 - r, c + 1 - half, half - r)
+             for r, row in enumerate(matrix) for c, bit in enumerate(row) if bit]
+    merged = unary_union(boxes)
+    # Two dark modules that only meet at a corner would leave a pinched
+    # outline (not a valid solid). A tiny opening splits them cleanly
+    # without moving any edge.
+    merged = merged.buffer(-0.01, join_style=2).buffer(0.01, join_style=2)
+    merged = shapely.set_precision(merged, 1e-6)
+    pieces = [p for g in getattr(merged, "geoms", [merged]) for p in _repaired_polygons(g)]
+    if not pieces:
+        raise MeshError("le QR code généré est vide")
+    return [LogoShape(p, color) for p in pieces]
 
 
 def _is_usable_polygon(p) -> bool:

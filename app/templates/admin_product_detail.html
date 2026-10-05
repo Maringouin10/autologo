@@ -15,13 +15,15 @@
 
 {% block content %}
 <main class="admin-main">
+  {% set qr_zones = zones|selectattr('kind', 'equalto', 'qr')|list %}
+  {% set logo_zones = zones|rejectattr('kind', 'equalto', 'qr')|list %}
   <div class="page-head">
     <div class="row">
       <span class="product-dot" style="background:{{ swatch }}"></span>
       <div>
         <h1>{{ product['name'] }}</h1>
         <p>
-          {{ zones|length }} zone{{ 's' if zones|length > 1 else '' }} ·
+          {{ logo_zones|length }} zone{{ 's' if logo_zones|length > 1 else '' }}{% if qr_zones %} + {{ qr_zones|length }} QR code{{ 's' if qr_zones|length > 1 else '' }}{% endif %} ·
           {{ 'assemblage complet' if product['export_mode'] == 'assembly' else 'pièce personnalisée seule' }} ·
           créé <span title="{{ product['created_at']|fr_datetime }}">{{ product['created_at']|fr_ago }}</span>
         </p>
@@ -91,13 +93,13 @@
   </section>
 
   <section class="admin-card">
-    <h2>Zones personnalisables <span class="badge">{{ zones|length }}</span></h2>
+    <h2>Zones personnalisables <span class="badge">{{ logo_zones|length }}</span></h2>
     <p class="card-sub">Réglages verrouillés : le client place son logo, mais ne peut pas changer ces paramètres d'impression. Les zones d'un même groupe sont des faces identiques — le client choisit un seul logo pour toutes, ou un par face.</p>
     <div class="table-wrap">
       <table class="admin-table">
         <thead><tr><th>Zone</th><th>Pièce</th><th>Groupe</th><th>Mode</th><th class="num">Profondeur</th></tr></thead>
         <tbody>
-          {% for z in zones %}
+          {% for z in logo_zones %}
           <tr>
             <td>{{ z['label'] }}</td>
             <td class="muted">{{ z['part_name'] }}</td>
@@ -120,6 +122,29 @@
       </table>
     </div>
   </section>
+
+  {% if qr_zones %}
+  <section class="admin-card">
+    <h2>QR codes <span class="badge">{{ qr_zones|length }}</span></h2>
+    <p class="card-sub">Posés par vous : le client ne les voit pas, mais chaque commande les contient. Pour les modifier, utilisez « Modifier ce produit » (retirez-le puis ajoutez-le à nouveau).</p>
+    <div class="table-wrap">
+      <table class="admin-table">
+        <thead><tr><th>QR code</th><th>Contenu</th><th>Pièce</th><th>Mode</th><th class="num">Taille</th></tr></thead>
+        <tbody>
+          {% for z in qr_zones %}
+          <tr>
+            <td>{{ z['label'] }}</td>
+            <td class="muted">{{ z['qr_text'] }}</td>
+            <td class="muted">{{ z['part_name'] }}</td>
+            <td><span class="badge {{ 'badge-accent' if z['mode'] == 'emboss' else '' }}">{{ 'Relief' if z['mode'] == 'emboss' else 'Gravé' }}</span></td>
+            <td class="num muted">{{ z['qr_width_mm'] }} mm</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
 
   <section class="admin-card danger-card">
     <h2>Supprimer ce produit</h2>

@@ -97,9 +97,9 @@ function loadModelGlb(url, bounds) {
   }, undefined, (err) => setError("échec du chargement de l'assemblage: " + err.message));
 }
 
-function addZoneMarker(face) {
+function addZoneMarker(face, color = 0x36d17a) {
   const geo = new THREE.PlaneGeometry(face.width, face.height);
-  const mat = new THREE.MeshBasicMaterial({ color: 0x36d17a, transparent: true, opacity: 0.4, side: THREE.DoubleSide });
+  const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.4, side: THREE.DoubleSide });
   const mesh = new THREE.Mesh(geo, mat);
   const u = new THREE.Vector3(...face.u), v = new THREE.Vector3(...face.v), n = new THREE.Vector3(...face.normal);
   mesh.setRotationFromMatrix(new THREE.Matrix4().makeBasis(u, v, n));
@@ -112,6 +112,7 @@ function addZoneMarker(face) {
 // One screen serves both "new product" and "edit product". Editing skips the
 // upload step — a published product's model is fixed, since its zones are
 // pinned to that mesh's face indices — and starts from its stored zones.
+const QR_MARKER = 0x5aa9ff;
 const EDIT_PRODUCT_ID = document.body.dataset.productId || null;
 const state = { sessionId: null, currentFace: null, zones: [], partIsVolume: true };
 
@@ -165,7 +166,7 @@ async function bootEditMode() {
       // Existing zones keep their id. The server then reuses their stored
       // face rather than re-resolving it, so renaming a zone or nudging a
       // depth can never move where it actually sits on the model.
-      state.zones.push({ ...z, marker: addZoneMarker(z.face) });
+      state.zones.push({ ...z, marker: addZoneMarker(z.face, z.kind === "qr" ? QR_MARKER : 0x36d17a) });
     }
     renderZonesList();
     refreshGroupOptions();
@@ -212,8 +213,9 @@ renderer.domElement.addEventListener("click", async (ev) => {
     document.getElementById("face-info").textContent =
       `Pièce "${data.part_name}" — face ${data.width.toFixed(1)} × ${data.height.toFixed(1)} mm`;
     document.getElementById("zone-form").classList.remove("hidden");
-    document.getElementById("zone-label").value = `Zone ${state.zones.length + 1}`;
+    resetLabel();
     refreshGroupOptions(groupSelect.value);
+    initQrPlacement(data);
   } catch (err) {
     document.getElementById("face-info").textContent = "Aucune face sélectionnée.";
     setError(err.message);
@@ -251,6 +253,140 @@ document.querySelectorAll('input[name=zone-mode]').forEach((radio) => {
     updateWatertightHint();
   });
 });
+
+// --- QR codes (vendor-placed) --------------------------------------------------
+// A QR zone is a zone the vendor fills in completely: what it encodes, how big
+// it is, where it sits. The customer never sees it; every order carries it.
+const kindRadios = document.querySelectorAll('input[name=zone-kind]');
+const qrEl = {
+  text: document.getElementById("qr-text"),
+  width: document.getElementById("qr-width"),
+  x: document.getElementById("qr-x"),
+  y: document.getElementById("qr-y"),
+};
+let qrRotation = 0;
+let qrPreview = null;
+
+const zoneKind = () => document.querySelector('input[name=zone-kind]:checked').value;
+
+function resetLabel() {
+  const qr = zoneKind() === "qr";
+  const n = state.zones.filter((z) => (z.kind === "qr") === qr).length + 1;
+  document.getElementById("zone-label").value = qr ? `QR code ${n}` : `Zone ${n}`;
+}
+
+function clearQrPreview() {
+  if (qrPreview) { scene.remove(qrPreview); qrPreview = null; }
+}
+
+function updateQrReadout() {
+  document.getElementById("qr-width-val").textContent = `${parseFloat(qrEl.width.value).toFixed(1)} mm`;
+  document.getElementById("qr-x-val").textContent = `${parseFloat(qrEl.x.value).toFixed(1)} mm`;
+  document.getElementById("qr-y-val").textContent = `${parseFloat(qrEl.y.value).toFixed(1)} mm`;
+  document.querySelectorAll("#qr-rotations button").forEach((b) =>
+    b.classList.toggle("btn-primary", parseFloat(b.dataset.rot) === qrRotation));
+}
+
+function setQrPlacement({ width, x, y, rotation }) {
+  if (width != null) qrEl.width.value = width;
+  if (x != null) qrEl.x.value = x;
+  if (y != null) qrEl.y.value = y;
+  if (rotation != null) qrRotation = rotation;
+  updateQrReadout();
+  scheduleQrPreview();
+}
+
+// The sliders span the picked face, so a QR can be dragged anywhere on it.
+function initQrPlacement(face) {
+  const reach = Math.ceil(Math.max(face.width, face.height) / 2) + 5;
+  for (const el of [qrEl.x, qrEl.y]) { el.min = -reach; el.max = reach; }
+  qrEl.width.max = Math.ceil(Math.max(face.width, face.height));
+  const c = face.center || { x: 0, y: 0 };
+  setQrPlacement({
+    width: Math.max(5, Math.round(Math.min(face.width, face.height) * 0.6)),
+    x: c.x, y: c.y, rotation: 0,
+  });
+}
+
+function qrBody() {
+  return {
+    face_index: state.currentFace.face_index,
+    text: qrEl.text.value,
+    width_mm: parseFloat(qrEl.width.value),
+    rotation_deg: qrRotation,
+    offset_x_mm: parseFloat(qrEl.x.value),
+    offset_y_mm: parseFloat(qrEl.y.value),
+  };
+}
+
+let qrPreviewTimer = null;
+let qrPreviewSeq = 0;
+function scheduleQrPreview() {
+  clearTimeout(qrPreviewTimer);
+  qrPreviewTimer = setTimeout(refreshQrPreview, 150);
+}
+
+async function refreshQrPreview() {
+  if (zoneKind() !== "qr" || !state.currentFace || !qrEl.text.value.trim()) { clearQrPreview(); return; }
+  const seq = ++qrPreviewSeq;
+  try {
+    const res = await fetch(`/api/admin/session/${state.sessionId}/qr/preview`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(qrBody()),
+    });
+    if (!res.ok) throw new Error((await readJson(res)).error || "aperçu impossible");
+    const buf = await res.arrayBuffer();
+    if (seq !== qrPreviewSeq) return;   // a newer request superseded this one
+    gltfLoader.parse(buf, "", (gltf) => {
+      if (seq !== qrPreviewSeq) return;
+      clearQrPreview();
+      gltf.scene.traverse((o) => {
+        if (o.isMesh) o.material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6 });
+      });
+      qrPreview = gltf.scene;
+      scene.add(qrPreview);
+    }, (err) => toastError("aperçu du QR code illisible : " + err.message));
+  } catch (err) {
+    clearQrPreview();
+    setError(err.message);
+  }
+}
+
+function applyKind() {
+  const qr = zoneKind() === "qr";
+  document.getElementById("qr-fields").classList.toggle("hidden", !qr);
+  document.getElementById("logo-fields").classList.toggle("hidden", qr);
+  document.getElementById("add-zone-btn").textContent = qr ? "＋ Ajouter ce QR code" : "＋ Ajouter cette zone";
+  document.getElementById("step-zone").querySelector("h2").lastChild.textContent =
+    qr ? " Ajouter un QR code" : " Ajouter une zone";
+  resetLabel();
+  if (qr && state.currentFace) initQrPlacement(state.currentFace);
+  if (!qr) clearQrPreview();
+}
+kindRadios.forEach((r) => r.addEventListener("change", applyKind));
+[qrEl.text, qrEl.width, qrEl.x, qrEl.y].forEach((el) => el.addEventListener("input", () => {
+  updateQrReadout();
+  scheduleQrPreview();
+}));
+document.querySelectorAll("#qr-rotations button").forEach((b) =>
+  b.addEventListener("click", () => setQrPlacement({ rotation: parseFloat(b.dataset.rot) })));
+document.getElementById("qr-center").addEventListener("click", () => {
+  const c = state.currentFace?.center;
+  if (c) setQrPlacement({ x: c.x, y: c.y });
+});
+document.getElementById("qr-fit").addEventListener("click", async () => {
+  if (!state.currentFace || !qrEl.text.value.trim()) { toastError("Saisissez d'abord le contenu du QR code."); return; }
+  try {
+    const res = await fetch(`/api/admin/session/${state.sessionId}/qr/fit`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(qrBody()),
+    });
+    const data = await readJson(res);
+    if (!res.ok) throw new Error(data.error || "ajustement impossible");
+    setQrPlacement({ width: Math.max(5, Math.floor(data.width_mm * 2) / 2) });
+  } catch (err) { setError(err.message); }
+});
+updateQrReadout();
 
 // --- groups of identical faces ------------------------------------------------
 // A group key is just its display label ("Groupe 1"): zones carrying the same
@@ -291,14 +427,22 @@ groupSelect.addEventListener("change", () => {
   groupSelect.value = key;
 });
 
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
 function renderZonesList() {
   const list = document.getElementById("zones-list");
   list.innerHTML = "";
   state.zones.forEach((z, i) => {
     const card = document.createElement("div");
     card.className = "zone-card";
+    const qrBadge = z.kind === "qr"
+      ? ` <span class="badge badge-accent">QR · ${escapeHtml(z.qr_text.length > 28 ? z.qr_text.slice(0, 28) + "…" : z.qr_text)}</span>`
+      : "";
     card.innerHTML =
-      `<span>${z.label} — ${z.part_name} — ${z.mode === "emboss" ? "relief" : "gravé"}, ${z.depth_mm} mm` +
+      `<span>${escapeHtml(z.label)} — ${z.part_name} — ${z.mode === "emboss" ? "relief" : "gravé"}, ${z.depth_mm} mm` +
+      qrBadge +
       (z.group_key ? ` <span class="badge badge-accent">${z.group_key}</span>` : "") +
       `</span><button type="button" class="zone-remove" title="Retirer">✕</button>`;
     card.querySelector(".zone-remove").addEventListener("click", () => {
@@ -307,6 +451,7 @@ function renderZonesList() {
       renderZonesList();
       markStepDone("step-zones-list", state.zones.length > 0);
       enableStep("step-publish", state.zones.length > 0);
+      resetLabel();
     });
     list.appendChild(card);
   });
@@ -315,10 +460,20 @@ function renderZonesList() {
 document.getElementById("add-zone-btn").addEventListener("click", () => {
   if (!state.currentFace) return;
   const mode = document.querySelector('input[name=zone-mode]:checked').value;
+  const isQr = zoneKind() === "qr";
+  if (isQr && !qrEl.text.value.trim()) { setError("Saisissez l'adresse ou le texte du QR code."); return; }
   const zone = {
+    kind: isQr ? "qr" : "logo",
+    ...(isQr ? {
+      qr_text: qrEl.text.value.trim(),
+      qr_width_mm: parseFloat(qrEl.width.value),
+      qr_rotation_deg: qrRotation,
+      qr_offset_x_mm: parseFloat(qrEl.x.value),
+      qr_offset_y_mm: parseFloat(qrEl.y.value),
+    } : {}),
     label: document.getElementById("zone-label").value.trim() || `Zone ${state.zones.length + 1}`,
     part_name: state.currentFace.part_name,
-    group_key: groupSelect.value === "__new__" ? "" : groupSelect.value,
+    group_key: isQr || groupSelect.value === "__new__" ? "" : groupSelect.value,
     mode,
     depth_mm: parseFloat(zoneSliders.depth.value),
     sink_mm: parseFloat(zoneSliders.sink.value),
@@ -333,7 +488,7 @@ document.getElementById("add-zone-btn").addEventListener("click", () => {
       width: state.currentFace.width, height: state.currentFace.height,
     },
   };
-  zone.marker = addZoneMarker(zone.face);
+  zone.marker = addZoneMarker(zone.face, isQr ? QR_MARKER : 0x36d17a);
   state.zones.push(zone);
   renderZonesList();
   markStepDone("step-zone");
@@ -342,6 +497,8 @@ document.getElementById("add-zone-btn").addEventListener("click", () => {
   enableStep("step-publish", true);
 
   state.currentFace = null;
+  clearQrPreview();
+  qrEl.text.value = "";
   document.getElementById("zone-form").classList.add("hidden");
   document.getElementById("face-info").textContent = "Aucune face sélectionnée.";
   // Adding the other faces of the same group is the common next step, so the
@@ -352,6 +509,10 @@ document.getElementById("add-zone-btn").addEventListener("click", () => {
 // --- publish / save -----------------------------------------------------------
 document.getElementById("publish-btn").addEventListener("click", async () => {
   if (!state.sessionId || !state.zones.length) return;
+  if (!state.zones.some((z) => z.kind !== "qr")) {
+    setError("Ajoutez au moins une zone de logo : un QR code seul ne suffit pas.");
+    return;
+  }
   setError("");
   const btn = document.getElementById("publish-btn");
   const originalLabel = btn.textContent;
@@ -370,8 +531,10 @@ document.getElementById("publish-btn").addEventListener("click", async () => {
         // face and only updates the editable fields. `face_index` marks a
         // newly picked one, which the server resolves itself.
         zones: state.zones.map(({ id, label, mode, depth_mm, sink_mm, fill_extra_mm,
-                                  face_index, group_key }) =>
-          ({ id, label, mode, depth_mm, sink_mm, fill_extra_mm, face_index, group_key })),
+                                  face_index, group_key, kind, qr_text, qr_width_mm,
+                                  qr_rotation_deg, qr_offset_x_mm, qr_offset_y_mm }) =>
+          ({ id, label, mode, depth_mm, sink_mm, fill_extra_mm, face_index, group_key, kind,
+             qr_text, qr_width_mm, qr_rotation_deg, qr_offset_x_mm, qr_offset_y_mm })),
       }),
     });
     const data = await readJson(res);

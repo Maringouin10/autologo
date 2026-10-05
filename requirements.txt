@@ -9,3 +9,4 @@ rtree==1.*
 svg.path==6.*
 mapbox_earcut==2.*
 manifold3d==3.*
+segno==1.6.*

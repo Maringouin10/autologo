@@ -52,22 +52,75 @@
       <p class="hint">Cliquez sur une face <b>plate</b> de la pièce à personnaliser, dans la vue 3D.</p>
       <p class="hint" id="face-info">Aucune face sélectionnée.</p>
       <div id="zone-form" class="hidden" style="margin-top:12px">
+        <div class="mode-choice">
+          <label class="opt">
+            <input type="radio" name="zone-kind" value="logo" checked>
+            <span class="opt-body">
+              <b>Zone de logo</b>
+              <small>Le client y place son logo.</small>
+            </span>
+          </label>
+          <label class="opt">
+            <input type="radio" name="zone-kind" value="qr">
+            <span class="opt-body">
+              <b>QR code</b>
+              <small>Posé par vous, identique sur chaque commande.</small>
+            </span>
+          </label>
+        </div>
         <div class="field">
           <label for="zone-label">Nom de la zone</label>
           <input type="text" id="zone-label" placeholder="Zone 1">
         </div>
-        <div class="field">
-          <label for="zone-group">Faces identiques</label>
-          <select id="zone-group">
-            <option value="">Face indépendante</option>
-            <option value="__new__">＋ Nouveau groupe de faces identiques</option>
-          </select>
+        <div id="logo-fields">
+          <div class="field">
+            <label for="zone-group">Faces identiques</label>
+            <select id="zone-group">
+              <option value="">Face indépendante</option>
+              <option value="__new__">＋ Nouveau groupe de faces identiques</option>
+            </select>
+          </div>
+          <p class="hint" style="margin:-6px 0 12px">
+            Regroupez les faces identiques (les 4 côtés d'un cube, par exemple) :
+            le client choisira alors entre <b>le même logo partout</b> ou
+            <b>un logo par face</b>.
+          </p>
         </div>
-        <p class="hint" style="margin:-6px 0 12px">
-          Regroupez les faces identiques (les 4 côtés d'un cube, par exemple) :
-          le client choisira alors entre <b>le même logo partout</b> ou
-          <b>un logo par face</b>.
-        </p>
+        <div id="qr-fields" class="hidden">
+          <div class="field">
+            <label for="qr-text">Adresse ou texte du QR code</label>
+            <input type="text" id="qr-text" placeholder="https://mon-site.fr/produit" maxlength="400" autocomplete="off">
+          </div>
+          <p class="hint" style="margin:-6px 0 12px">
+            Plus le contenu est court, plus le QR est gros et facile à lire une fois imprimé.
+            Aucune limite de couleurs : c'est vous qui le placez.
+          </p>
+          <div class="field">
+            <label for="qr-width">Taille <span id="qr-width-val" class="val"></span></label>
+            <input type="range" id="qr-width" min="5" max="120" step="0.5" value="20">
+          </div>
+          <div class="field">
+            <label>Rotation</label>
+            <div class="row" id="qr-rotations">
+              <button type="button" class="btn btn-soft" data-rot="0">0°</button>
+              <button type="button" class="btn btn-soft" data-rot="90">90°</button>
+              <button type="button" class="btn btn-soft" data-rot="180">180°</button>
+              <button type="button" class="btn btn-soft" data-rot="270">270°</button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="qr-x">Position horizontale <span id="qr-x-val" class="val"></span></label>
+            <input type="range" id="qr-x" min="-50" max="50" step="0.5" value="0">
+          </div>
+          <div class="field">
+            <label for="qr-y">Position verticale <span id="qr-y-val" class="val"></span></label>
+            <input type="range" id="qr-y" min="-50" max="50" step="0.5" value="0">
+          </div>
+          <div class="row" style="margin-bottom:12px">
+            <button type="button" class="btn btn-soft" id="qr-center">⊙ Centrer</button>
+            <button type="button" class="btn btn-soft" id="qr-fit">Agrandir au max</button>
+          </div>
+        </div>
         <div class="mode-choice">
           <label class="opt">
             <input type="radio" name="zone-mode" value="emboss" checked>
@@ -149,6 +202,7 @@
     </div>
     <div class="viewer-legend">
       <span class="row"><span class="legend-dot" style="background:#3ddc97"></span> Zone personnalisable</span>
+      <span class="row"><span class="legend-dot" style="background:#5aa9ff"></span> QR code</span>
     </div>
   </div>
 </main>

@@ -209,7 +209,8 @@ def submit(sess: OrderSession) -> str:
     product = db.get_product(sess.product_id)
     if product is None:
         raise mw.MeshError("produit introuvable")
-    zone_rows = {z["id"]: z for z in db.list_zones(sess.product_id)}
+    zone_rows = {z["id"]: z for z in db.list_logo_zones(sess.product_id)}
+    qr_rows = db.list_qr_zones(sess.product_id)
     if not zone_rows:
         raise mw.MeshError("ce produit n'a aucune zone personnalisable")
 
@@ -238,16 +239,13 @@ def submit(sess: OrderSession) -> str:
             f"accepte {config.MAX_PRINT_COLORS} au maximum — réutilisez une "
             "couleur déjà choisie pour l'une des formes.")
 
-    for zone_id, work in sess.zones.items():
-        row = zone_rows[zone_id]
+    def apply(row, shapes, params, name_prefix: str) -> None:
+        """Emboss or engrave `shapes` on the zone's face, in the working copy."""
         part_name = row["part_name"]
         if part_name not in working_parts:
             raise mw.MeshError(f"pièce '{part_name}' introuvable dans le modèle")
         face = zone_face(row, product)
-        shapes = work.printed_polygons()
-        params = work.placement_params()
         touched_parts.add(part_name)
-
         if row["mode"] == "emboss":
             logos = mw.emboss(shapes, face, params,
                                depth_mm=row["depth_mm"], sink_mm=row["sink_mm"])
@@ -258,9 +256,24 @@ def submit(sess: OrderSession) -> str:
         # One object per fill color, so the slicer can assign a filament to
         # each; the zone id keeps names unique across a multi-zone product.
         for i, (color, mesh) in enumerate(logos.items()):
-            name = f"{part_name}_logo_{zone_id}_{i + 1}_{color.lstrip('#')}"
+            name = f"{part_name}_{name_prefix}_{row['id']}_{i + 1}_{color.lstrip('#')}"
             named[name] = mesh
             object_colors[name] = color
+
+    for zone_id, work in sess.zones.items():
+        if zone_id not in zone_rows:
+            continue   # not a customer zone (a stale or forged id)
+        apply(zone_rows[zone_id], work.printed_polygons(), work.placement_params(), "logo")
+
+    # The vendor's QR codes: same pipeline, but content and placement are
+    # fixed on the product and no customer input is involved. They are not
+    # counted against MAX_PRINT_COLORS — that cap protects the customer's
+    # order, and the vendor chose these on purpose.
+    for row in qr_rows:
+        apply(row, mw.qr_shapes(row["qr_text"]),
+              mw.PlacementParams(width_mm=row["qr_width_mm"], rotation_deg=row["qr_rotation_deg"],
+                                 offset_x_mm=row["qr_offset_x_mm"], offset_y_mm=row["qr_offset_y_mm"]),
+              "qr")
 
     for name in touched_parts:
         named[name] = working_parts[name]
@@ -301,8 +314,10 @@ def colors_summary(sess: OrderSession) -> dict:
         for color in colors:
             if color not in logo_colors:
                 logo_colors.append(color)
+    qr_colors = [mw.QR_COLOR] if db.list_qr_zones(sess.product_id) else []
     return {
         "model": {"hex": sess.model_color, "name": config.color_name(sess.model_color)}
                   if sess.model_color else None,
         "logo": [{"hex": c, "name": config.color_name(c)} for c in logo_colors],
+        "qr": [{"hex": c, "name": config.color_name(c)} for c in qr_colors],
     }
