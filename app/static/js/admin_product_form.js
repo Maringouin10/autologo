@@ -327,7 +327,7 @@ function scheduleQrPreview() {
 }
 
 async function refreshQrPreview() {
-  if (zoneKind() !== "qr" || !state.currentFace || !qrEl.text.value.trim()) { clearQrPreview(); return; }
+  if (zoneKind() !== "qr" || !state.currentFace) { clearQrPreview(); return; }
   const seq = ++qrPreviewSeq;
   try {
     const res = await fetch(`/api/admin/session/${state.sessionId}/qr/preview`, {
@@ -375,7 +375,7 @@ document.getElementById("qr-center").addEventListener("click", () => {
   if (c) setQrPlacement({ x: c.x, y: c.y });
 });
 document.getElementById("qr-fit").addEventListener("click", async () => {
-  if (!state.currentFace || !qrEl.text.value.trim()) { toastError("Saisissez d'abord le contenu du QR code."); return; }
+  if (!state.currentFace) return;
   try {
     const res = await fetch(`/api/admin/session/${state.sessionId}/qr/fit`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -438,7 +438,7 @@ function renderZonesList() {
     const card = document.createElement("div");
     card.className = "zone-card";
     const qrBadge = z.kind === "qr"
-      ? ` <span class="badge badge-accent">QR · ${escapeHtml(z.qr_text.length > 28 ? z.qr_text.slice(0, 28) + "…" : z.qr_text)}</span>`
+      ? ` <span class="badge badge-accent">QR · ${z.qr_text ? escapeHtml(z.qr_text.length > 28 ? z.qr_text.slice(0, 28) + "…" : z.qr_text) : "saisi par le client"}</span>`
       : "";
     card.innerHTML =
       `<span>${escapeHtml(z.label)} — ${z.part_name} — ${z.mode === "emboss" ? "relief" : "gravé"}, ${z.depth_mm} mm` +
@@ -461,7 +461,6 @@ document.getElementById("add-zone-btn").addEventListener("click", () => {
   if (!state.currentFace) return;
   const mode = document.querySelector('input[name=zone-mode]:checked').value;
   const isQr = zoneKind() === "qr";
-  if (isQr && !qrEl.text.value.trim()) { setError("Saisissez l'adresse ou le texte du QR code."); return; }
   const zone = {
     kind: isQr ? "qr" : "logo",
     ...(isQr ? {

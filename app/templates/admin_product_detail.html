@@ -126,7 +126,7 @@
   {% if qr_zones %}
   <section class="admin-card">
     <h2>QR codes <span class="badge">{{ qr_zones|length }}</span></h2>
-    <p class="card-sub">Posés par vous : le client ne les voit pas, mais chaque commande les contient. Pour les modifier, utilisez « Modifier ce produit » (retirez-le puis ajoutez-le à nouveau).</p>
+    <p class="card-sub">Vous fixez l'emplacement et la taille ; le client saisit l'adresse (sauf contenu imposé). Pour les modifier, utilisez « Modifier ce produit » (retirez-le puis ajoutez-le à nouveau).</p>
     <div class="table-wrap">
       <table class="admin-table">
         <thead><tr><th>QR code</th><th>Contenu</th><th>Pièce</th><th>Mode</th><th class="num">Taille</th></tr></thead>
@@ -134,7 +134,7 @@
           {% for z in qr_zones %}
           <tr>
             <td>{{ z['label'] }}</td>
-            <td class="muted">{{ z['qr_text'] }}</td>
+            <td class="muted">{{ z['qr_text'] or 'Saisi par le client' }}</td>
             <td class="muted">{{ z['part_name'] }}</td>
             <td><span class="badge {{ 'badge-accent' if z['mode'] == 'emboss' else '' }}">{{ 'Relief' if z['mode'] == 'emboss' else 'Gravé' }}</span></td>
             <td class="num muted">{{ z['qr_width_mm'] }} mm</td>

@@ -888,11 +888,14 @@ let SESSION_ID = null;
 const engines = [];
 const panels = [];
 
+const qrPanels = [];
+
 function updateSubmitState() {
+  const qrOk = qrPanels.every((q) => q.ready());
   const ready = engines.filter((e) => e.hasLogo && e.previewObject && includedCount(e) > 0).length;
   const total = engines.length;
   const over = usedColors().length > state.maxColors;
-  const allReady = total > 0 && ready === total && !over;
+  const allReady = total > 0 && ready === total && !over && qrOk;
   document.getElementById("submit-btn").disabled = !allReady;
   const status = document.getElementById("submit-status");
   if (!status) return;
@@ -900,12 +903,79 @@ function updateSubmitState() {
     status.textContent = `Trop de couleurs (${usedColors().length}/${state.maxColors})`;
   } else if (allReady) {
     status.textContent = total > 1 ? "Vos logos sont prêts ✓" : "Votre logo est prêt ✓";
+  } else if (ready === total && !qrOk) {
+    status.textContent = "Saisissez l'adresse de votre QR code";
   } else {
     status.textContent = total > 1
       ? `${ready}/${total} logos placés`
       : "Importez votre logo pour continuer";
   }
   status.classList.toggle("ready", allReady);
+}
+
+// --- QR codes ---------------------------------------------------------------------
+// The vendor decides where a QR goes and how big it is; the customer only
+// says what it should encode. The server remembers the text and returns the
+// placed preview, so there is nothing else for the customer to position.
+function makeQrPanel(z) {
+  const el = document.createElement("section");
+  el.className = "zone-block";
+  el.innerHTML = `
+    <h2>${escapeHtml(z.label)}</h2>
+    <p class="hint">Saisissez l'adresse (lien) ou le texte que votre QR code doit contenir.
+      Un contenu court donne un QR plus gros et plus facile à scanner une fois imprimé.</p>
+    <div class="field">
+      <input type="text" class="qr-input" placeholder="https://mon-site.fr" maxlength="400"
+             autocomplete="off" inputmode="url" aria-label="Adresse du QR code">
+    </div>
+    <p class="hint error qr-error"></p>`;
+  const input = el.querySelector(".qr-input");
+  const errorEl = el.querySelector(".qr-error");
+  let preview = null, seq = 0, timer = null, ok = false;
+
+  function clear() { if (preview) { scene.remove(preview); preview = null; } }
+
+  async function refresh() {
+    const text = input.value.trim();
+    const mine = ++seq;
+    if (!text) { clear(); ok = false; errorEl.textContent = ""; updateSubmitState(); return; }
+    try {
+      const res = await fetch(`/api/order/session/${SESSION_ID}/qr/${z.id}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) throw new Error((await readJson(res)).error || "QR code impossible");
+      const buf = await res.arrayBuffer();
+      if (mine !== seq) return;
+      gltfLoader.parse(buf, "", (gltf) => {
+        if (mine !== seq) return;
+        clear();
+        gltf.scene.traverse((o) => { if (o.isMesh) o.material = coloredPreviewMaterial; });
+        preview = gltf.scene;
+        scene.add(preview);
+      }, () => {});
+      ok = true;
+      errorEl.textContent = "";
+    } catch (err) {
+      if (mine !== seq) return;
+      clear();
+      ok = false;
+      errorEl.textContent = err.message;
+    }
+    updateSubmitState();
+  }
+
+  input.addEventListener("input", () => {
+    ok = false;                       // not valid until the server has accepted this text
+    updateSubmitState();
+    clearTimeout(timer);
+    timer = setTimeout(refresh, 300);
+  });
+  return { el, ready: () => ok };
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 /** Zones the vendor marked as identical faces travel together. */
@@ -947,6 +1017,7 @@ async function boot() {
         <ol>
           <li>Déposez votre logo au format SVG.</li>
           <li>Glissez-le sur l'objet en 3D et ajustez sa taille.</li>
+          ${(product.qr_zones || []).length ? "<li>Saisissez l'adresse de votre QR code.</li>" : ""}
           <li>Choisissez vos couleurs, puis envoyez.</li>
         </ol>
       </div>`;
@@ -957,6 +1028,12 @@ async function boot() {
       const panel = makeGroupPanel(groupEngines);
       panels.push(panel);
       container.appendChild(panel.el);
+    }
+
+    for (const z of product.qr_zones || []) {
+      const qr = makeQrPanel(z);
+      qrPanels.push(qr);
+      container.appendChild(qr.el);
     }
 
     const colorsPanel = document.createElement("section");

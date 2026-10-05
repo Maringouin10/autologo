@@ -64,7 +64,7 @@
             <input type="radio" name="zone-kind" value="qr">
             <span class="opt-body">
               <b>QR code</b>
-              <small>Posé par vous, identique sur chaque commande.</small>
+              <small>Vous le placez ; le client saisit son adresse (ou vous la fixez).</small>
             </span>
           </label>
         </div>
@@ -88,12 +88,13 @@
         </div>
         <div id="qr-fields" class="hidden">
           <div class="field">
-            <label for="qr-text">Adresse ou texte du QR code</label>
-            <input type="text" id="qr-text" placeholder="https://mon-site.fr/produit" maxlength="400" autocomplete="off">
+            <label for="qr-text">Contenu imposé <small>(facultatif)</small></label>
+            <input type="text" id="qr-text" placeholder="Laisser vide : le client saisit l'adresse" maxlength="400" autocomplete="off">
           </div>
           <p class="hint" style="margin:-6px 0 12px">
-            Plus le contenu est court, plus le QR est gros et facile à lire une fois imprimé.
-            Aucune limite de couleurs : c'est vous qui le placez.
+            <b>Vide</b> : le client verra un champ pour saisir son adresse (l'aperçu ci-dessous
+            utilise une adresse d'exemple). <b>Rempli</b> : même QR sur chaque commande, sans champ côté client.
+            La taille que vous réglez est celle du QR fini ; une adresse plus longue donne des modules plus petits.
           </p>
           <div class="field">
             <label for="qr-width">Taille <span id="qr-width-val" class="val"></span></label>

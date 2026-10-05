@@ -695,13 +695,17 @@ def admin_select_face(session_id):
     return jsonify(result)
 
 
+QR_SAMPLE_TEXT = "https://exemple.fr/mon-lien"
+
+
 def _qr_request(sess, data: dict):
     """(qr shapes, flat region, placement) for an admin QR preview/fit call."""
     try:
         face_index = int(data["face_index"])
     except (KeyError, TypeError, ValueError):
         raise mw.MeshError("face_index manquant/invalide")
-    shapes = mw.qr_shapes(data.get("text", ""))
+    # No text yet (the customer will type it): preview with a stand-in.
+    shapes = mw.qr_shapes((data.get("text") or "").strip() or QR_SAMPLE_TEXT)
     info = mw.find_flat_region(sess.mesh(), sess.face_adjacency(), face_index)
     return shapes, info
 
@@ -821,8 +825,10 @@ def _build_zones(zones_in: list, sess, existing: dict) -> list[dict]:
         kind = "qr" if z.get("kind") == "qr" else "logo"
         qr = {}
         if kind == "qr":
+            # Empty = the customer types it; otherwise it is fixed for every order.
             text = str(z.get("qr_text") or "").strip()
-            mw.qr_shapes(text)   # validates: not empty, not too long, encodable
+            if text:
+                mw.qr_shapes(text)   # validates: not too long, encodable
             qr = {
                 "qr_text": text,
                 "qr_width_mm": max(3.0, float(z.get("qr_width_mm", 20.0))),
@@ -932,6 +938,12 @@ def _zone_public(z) -> dict:
     }
 
 
+def _qr_zone_public(z) -> dict:
+    """A QR zone as the customer's page needs it: just the label — where it
+    sits and how big is the vendor's business, and is applied server-side."""
+    return {"id": z["id"], "label": z["label"]}
+
+
 @app.route("/api/product/<product_id>")
 def api_product(product_id):
     product = db.get_product(product_id)
@@ -944,8 +956,10 @@ def api_product(product_id):
         "name": product["name"],
         "glb_url": url_for("product_glb", product_id=product_id),
         "bounds": json.loads(product["bounds_json"]),
-        # QR codes are the vendor's: the customer never sees them as a zone.
+        # Logo zones only: QR codes have their own list below.
         "zones": [_zone_public(z) for z in zones if z["kind"] != "qr"],
+        # QR zones the customer fills in (a fixed-text QR needs nothing from them).
+        "qr_zones": [_qr_zone_public(z) for z in zones if z["kind"] == "qr" and not z["qr_text"]],
         "palette": config.PALETTE,
         "max_colors": config.MAX_PRINT_COLORS,
         # What the object prints in if the customer changes nothing: the
@@ -1076,6 +1090,29 @@ def order_set_model_color(order_session_id):
         "colors_used": orders.order_colors(sess),
         "max_colors": config.MAX_PRINT_COLORS,
     })
+
+
+@app.route("/api/order/session/<order_session_id>/qr/<int:zone_id>", methods=["POST"])
+def order_qr_preview(order_session_id, zone_id):
+    """The customer types what their QR code should say; this remembers it
+    for the order and returns the placed preview (placement is the vendor's)."""
+    sess = _require_order_session(order_session_id)
+    row = _require_zone(sess, zone_id)
+    if row["kind"] != "qr" or row["qr_text"]:
+        abort(404, "ce QR code n'est pas modifiable")
+    text = ((request.get_json(force=True, silent=True) or {}).get("text") or "").strip()
+    try:
+        shapes = mw.qr_shapes(text)
+        info = orders.zone_face(row, db.get_product(sess.product_id))
+        params = mw.PlacementParams(
+            width_mm=row["qr_width_mm"], rotation_deg=row["qr_rotation_deg"],
+            offset_x_mm=row["qr_offset_x_mm"], offset_y_mm=row["qr_offset_y_mm"])
+        mesh = mw.preview_logo(shapes, info, params)
+    except mw.MeshError as exc:
+        sess.qr_texts.pop(zone_id, None)
+        return _err(exc)
+    sess.qr_texts[zone_id] = text
+    return _mesh_to_glb_response(mesh)
 
 
 @app.route("/api/order/session/<order_session_id>/zone/<int:zone_id>/preview", methods=["POST"])

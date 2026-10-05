@@ -70,32 +70,36 @@ products, or **/tool** for the plain single-model tool.
    order code back. Nothing else happens automatically yet (no payment, no
    email) — wire that code into whatever order form/checkout you already use.
 
-## QR codes (placed by the vendor)
+## QR codes
 
-A product can carry **QR codes that only you place** — a link to your shop,
-a care-instructions page, a serial number. They are not a customer zone:
-the customer never sees them, can't move or remove them, and every order
-gets them automatically.
+You decide **where** a QR code goes and how big it is; the **customer types
+what it says** (a link to their shop, their profile…) on the order page.
 
 In the product editor (step 2), click a flat face, then switch the form from
 **Zone de logo** to **QR code**:
 
-- type the **address or text** to encode (up to 400 characters — the shorter,
-  the bigger and more readable the printed code);
-- set **size**, **rotation** (quarter turns), and **position** with the sliders,
+- set **size**, **rotation** (quarter turns) and **position** with the sliders,
   or use **⊙ Centrer** / **Agrandir au max** (fits the QR inside the real
   outline of the face). A live preview shows it on the model;
-- pick **relief** or **gravé** and the depth, exactly as for a logo zone.
+- pick **relief** or **gravé** and the depth, as for a logo zone;
+- leave **Contenu imposé** empty so the customer fills it in — or type a
+  fixed address, in which case every order gets that same QR and the customer
+  sees no field at all.
 
-Because you place it, none of the customer-side limits apply: it isn't
-counted in `MAX_PRINT_COLORS`, and any number of QR codes can go on any faces.
-The QR is exported as its own object (`<piece>_qr_<zone>_1_<color>`) so the
-slicer can give it its own filament, and the order page lists its color as
-"QR code". A product still needs at least one logo zone to be orderable.
+On the customer page each customer-filled QR zone shows a text field and a
+live 3D preview at the spot you chose (position and size are not theirs to
+change). The order button stays disabled until it is filled. The size you set
+is the finished QR's size: a longer address means smaller modules, so keep an
+eye on scannability (400 characters maximum).
 
-The code uses error correction level **M** (15 % recoverable), and
-`tests/test_qr.py` rasterizes the finished 3D relief from above and decodes it
-back (when OpenCV is installed) — including rotated/offset placements.
+QR codes aren't counted in `MAX_PRINT_COLORS`, and any number can go on any
+faces. Each is exported as its own object (`<piece>_qr_<zone>_1_<color>`) so
+the slicer can give it its own filament; the order page lists it as "QR code".
+A product still needs at least one logo zone to be orderable.
+
+Error correction is level **M** (15 % recoverable), and `tests/test_qr.py`
+rasterizes the finished 3D relief from above and decodes it back (when OpenCV
+is installed), including rotated/offset placements.
 
 ## How the plain tool works
 

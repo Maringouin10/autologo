@@ -88,6 +88,7 @@ class OrderSession:
     created_at: float = field(default_factory=time.time)
     zones: dict = field(default_factory=dict)  # zone_id -> ZoneWork
     model_color: str | None = None             # filament picked for the object itself
+    qr_texts: dict = field(default_factory=dict)  # zone_id -> what the customer wants the QR to encode
 
     def touch(self) -> None:
         self.created_at = time.time()
@@ -203,6 +204,12 @@ def _new_order_code() -> str:
     raise RuntimeError("impossible de générer un numéro de commande unique")
 
 
+def qr_text_for(row, sess: "OrderSession") -> str:
+    """What a QR zone encodes: the vendor's fixed text if there is one,
+    otherwise whatever the customer typed for it."""
+    return (row["qr_text"] or "").strip() or (sess.qr_texts.get(row["id"]) or "").strip()
+
+
 def submit(sess: OrderSession) -> str:
     """Build the final 3MF for every zone in the order and persist it.
     Returns the order code shown to the customer."""
@@ -265,12 +272,15 @@ def submit(sess: OrderSession) -> str:
             continue   # not a customer zone (a stale or forged id)
         apply(zone_rows[zone_id], work.printed_polygons(), work.placement_params(), "logo")
 
-    # The vendor's QR codes: same pipeline, but content and placement are
-    # fixed on the product and no customer input is involved. They are not
+    # QR codes: same pipeline, but placement is fixed by the vendor, and the
+    # content is either fixed too or typed by the customer. They are not
     # counted against MAX_PRINT_COLORS — that cap protects the customer's
     # order, and the vendor chose these on purpose.
     for row in qr_rows:
-        apply(row, mw.qr_shapes(row["qr_text"]),
+        text = qr_text_for(row, sess)
+        if not text:
+            raise mw.MeshError(f"adresse du QR code manquante pour: {row['label']}")
+        apply(row, mw.qr_shapes(text),
               mw.PlacementParams(width_mm=row["qr_width_mm"], rotation_deg=row["qr_rotation_deg"],
                                  offset_x_mm=row["qr_offset_x_mm"], offset_y_mm=row["qr_offset_y_mm"]),
               "qr")
