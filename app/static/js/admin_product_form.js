@@ -505,6 +505,14 @@ document.getElementById("add-zone-btn").addEventListener("click", () => {
   refreshGroupOptions(zone.group_key);
 });
 
+// --- variants -------------------------------------------------------------------
+const variantOf = document.getElementById("variant-of");
+function syncVariantField() {
+  document.getElementById("variant-label-field").classList.toggle("hidden", !variantOf.value);
+}
+variantOf.addEventListener("change", syncVariantField);
+syncVariantField();
+
 // --- publish / save -----------------------------------------------------------
 document.getElementById("publish-btn").addEventListener("click", async () => {
   if (!state.sessionId || !state.zones.length) return;
@@ -526,6 +534,8 @@ document.getElementById("publish-btn").addEventListener("click", async () => {
         session_id: state.sessionId,
         name: document.getElementById("product-name").value.trim(),
         export_mode: document.getElementById("export-mode").value,
+        variant_of: document.getElementById("variant-of").value,
+        variant_label: document.getElementById("variant-label").value.trim(),
         // `id` marks a zone that already exists: the server keeps its stored
         // face and only updates the editable fields. `face_index` marks a
         // newly picked one, which the server resolves itself.

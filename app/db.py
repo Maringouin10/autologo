@@ -18,7 +18,9 @@ CREATE TABLE IF NOT EXISTS products (
     export_mode  TEXT NOT NULL DEFAULT 'assembly',  -- assembly | part
     bounds_json  TEXT NOT NULL DEFAULT '{}',        -- {"min":[x,y,z],"max":[x,y,z]} for the viewer camera
     colors_json  TEXT NOT NULL DEFAULT '{}',        -- {part_name: [r,g,b]}, extracted from the 3MF if any
-    created_at   TEXT NOT NULL
+    created_at   TEXT NOT NULL,
+    family       TEXT NOT NULL DEFAULT '',          -- products sharing one non-empty key are variants of each other
+    variant_label TEXT NOT NULL DEFAULT ''          -- how the customer's variant chooser names this one
 );
 
 CREATE TABLE IF NOT EXISTS zones (
@@ -64,6 +66,8 @@ _MIGRATIONS = {
     "products": {
         "bounds_json": "TEXT NOT NULL DEFAULT '{}'",
         "colors_json": "TEXT NOT NULL DEFAULT '{}'",
+        "family": "TEXT NOT NULL DEFAULT ''",
+        "variant_label": "TEXT NOT NULL DEFAULT ''",
     },
     "orders": {
         "status": "TEXT NOT NULL DEFAULT 'new'",
@@ -115,12 +119,14 @@ def _now() -> str:
 
 # --- products ------------------------------------------------------------
 def create_product(product_id: str, name: str, model_ext: str, export_mode: str,
-                    bounds_json: str = "{}", colors_json: str = "{}") -> None:
+                    bounds_json: str = "{}", colors_json: str = "{}",
+                    family: str = "", variant_label: str = "") -> None:
     with get_conn() as conn:
         conn.execute(
             "INSERT INTO products (id, name, model_ext, export_mode, bounds_json, "
-            "colors_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (product_id, name, model_ext, export_mode, bounds_json, colors_json, _now()),
+            "colors_json, created_at, family, variant_label) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (product_id, name, model_ext, export_mode, bounds_json, colors_json, _now(),
+             family, variant_label),
         )
 
 
@@ -134,10 +140,30 @@ def list_products() -> list[sqlite3.Row]:
         return conn.execute("SELECT * FROM products ORDER BY created_at DESC").fetchall()
 
 
-def update_product(product_id: str, name: str, export_mode: str) -> None:
+def update_product(product_id: str, name: str, export_mode: str,
+                    family: str | None = None, variant_label: str | None = None) -> None:
     with get_conn() as conn:
         conn.execute("UPDATE products SET name = ?, export_mode = ? WHERE id = ?",
                       (name, export_mode, product_id))
+        if family is not None:
+            conn.execute("UPDATE products SET family = ? WHERE id = ?", (family, product_id))
+        if variant_label is not None:
+            conn.execute("UPDATE products SET variant_label = ? WHERE id = ?",
+                          (variant_label, product_id))
+
+
+def list_variants(family: str) -> list[sqlite3.Row]:
+    """Every product of a family, oldest first (the order the customer sees them in)."""
+    if not family:
+        return []
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM products WHERE family = ? ORDER BY created_at, id",
+                             (family,)).fetchall()
+
+
+def set_family(product_id: str, family: str) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE products SET family = ? WHERE id = ?", (family, product_id))
 
 
 def replace_zones(product_id: str, zones: list[dict]) -> None:

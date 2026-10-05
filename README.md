@@ -101,6 +101,26 @@ Error correction is level **M** (15 % recoverable), and `tests/test_qr.py`
 rasterizes the finished 3D relief from above and decodes it back (when OpenCV
 is installed), including rotated/offset placements.
 
+## Variants (« avec vis », « à coller »…)
+
+Several products that are the same object but not quite — a holder with
+screws, the same holder to glue — can be **variants of one product**. The
+customer sees a single card in the gallery, picks the variant at the top of
+the product page, then personalizes it.
+
+- In the editor's last step, answer **« Variante d'un autre produit ? »** with
+  *Oui — variante de …* and give it a **name** (« Avec vis »). The first product
+  of the family can be named from its own edit page too (it shows its product
+  name until you do).
+- **Each variant is a full product**: its own 3D model, its own zones and QR
+  codes (zones are pinned to a mesh's faces, so they can't be shared between
+  two different models), its own orders and downloads. Upload the second
+  model as a new product, as usual.
+- The chooser lists a variant only once it has at least one logo zone, and
+  disappears if only one is left. A variant's direct link (`/o/<id>`) still
+  works and shows the same chooser.
+- Deleting a variant just removes it from the chooser; the others are untouched.
+
 ## Downloading the parts one by one
 
 A product's page lists **every part of the model** (« Pièces du modèle »),

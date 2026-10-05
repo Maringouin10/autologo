@@ -207,9 +207,39 @@ def logout():
 # --- public gallery --------------------------------------------------------------
 @app.route("/")
 def gallery():
-    products = [{"id": p["id"], "name": p["name"], "swatch": _product_swatch(p)}
-                for p in db.list_products()]
+    # A family of variants is one card: the customer picks the variant on the
+    # product page. The card shows the family's oldest member.
+    seen, products = set(), []
+    for p in sorted(db.list_products(), key=lambda r: r["created_at"]):
+        if p["family"]:
+            if p["family"] in seen:
+                continue
+            seen.add(p["family"])
+        products.append({"id": p["id"], "name": p["name"], "swatch": _product_swatch(p)})
+    products.reverse()   # newest first, as before
     return render_template("gallery.html", products=products)
+
+
+def _variant_fields(data: dict, product=None) -> tuple[str, str]:
+    """(family key, variant label) from the admin form.
+
+    `variant_of` is the id of a product of the family to join (empty = a
+    standalone product). A family is just a shared key — the id of whichever
+    product started it — so joining never rewrites the other members; only a
+    product that was standalone until now gets a key."""
+    label = str(data.get("variant_label") or "").strip()[:60]
+    target_id = str(data.get("variant_of") or "").strip()
+    if not target_id:
+        return "", label
+    target = db.get_product(target_id)
+    if target is None:
+        raise ValueError("produit de la famille introuvable")
+    if product is not None and target["id"] == product["id"]:
+        raise ValueError("un produit ne peut pas être sa propre variante")
+    family = target["family"] or target["id"]
+    if not target["family"]:
+        db.set_family(target["id"], family)
+    return family, label
 
 
 @app.route("/tool")
@@ -232,15 +262,37 @@ def admin_home():
         "swatch": _product_swatch(p),
         "zone_count": zone_counts.get(p["id"], 0),
         "pending_orders": pending.get(p["id"], 0),
+        "variant_label": (p["variant_label"] or p["name"]) if p["family"] else "",
     } for p in db.list_products()]
     return render_template("admin_products.html", products=products,
                             pending_total=sum(pending.values()))
 
 
+def _family_options(exclude: str = "") -> list[dict]:
+    """What a product can be declared a variant of: one entry per family (or
+    standalone product), named after its oldest member other than `exclude`
+    — the product being edited can't be its own variant."""
+    groups: dict[str, dict] = {}
+    for p in sorted(db.list_products(), key=lambda r: r["created_at"]):
+        if p["id"] == exclude:
+            continue
+        groups.setdefault(p["family"] or "solo:" + p["id"], {"id": p["id"], "name": p["name"]})
+    return list(groups.values())
+
+
+def _variant_of(product) -> str:
+    """The option that stands for this product's current family in the select."""
+    if not product["family"]:
+        return ""
+    members = [v for v in db.list_variants(product["family"]) if v["id"] != product["id"]]
+    return members[0]["id"] if members else ""
+
+
 @app.route("/admin/products/new")
 @login_required
 def admin_new_product():
-    return render_template("admin_product_form.html", product=None)
+    return render_template("admin_product_form.html", product=None,
+                            family_options=_family_options())
 
 
 @app.route("/admin/products/<product_id>/edit")
@@ -268,7 +320,9 @@ def admin_edit_product(product_id):
         "face": json.loads(z["face_json"]),   # the viewer needs it to draw the zone marker
     } for z in db.list_zones(product_id)]
     return render_template("admin_product_form.html", product=product,
-                            zones_json=json.dumps(zones))
+                            zones_json=json.dumps(zones),
+                            family_options=_family_options(exclude=product_id),
+                            current_variant_of=_variant_of(product))
 
 
 @app.route("/admin/products/<product_id>")
@@ -823,7 +877,9 @@ def admin_create_product():
 
     try:
         zones = _build_zones(zones_in, sess, existing={})
-        db.create_product(product_id, name, sess.model_ext, export_mode, bounds_json, colors_json)
+        family, variant_label = _variant_fields(data)
+        db.create_product(product_id, name, sess.model_ext, export_mode, bounds_json, colors_json,
+                           family, variant_label)
         db.replace_zones(product_id, zones)
     except (ValueError, TypeError, mw.MeshError) as exc:
         db.delete_product(product_id)
@@ -948,10 +1004,11 @@ def admin_update_product(product_id):
     existing = {z["id"]: z for z in db.list_zones(product_id)}
     try:
         zones = _build_zones(zones_in, sess, existing)
+        family, variant_label = _variant_fields(data, product)
     except (ValueError, TypeError, mw.MeshError) as exc:
         return _err(exc)
 
-    db.update_product(product_id, name, export_mode)
+    db.update_product(product_id, name, export_mode, family, variant_label)
     db.replace_zones(product_id, zones)
     return jsonify({
         "product_id": product_id,
@@ -980,6 +1037,19 @@ def _zone_public(z) -> dict:
     }
 
 
+def _variants_public(product) -> list[dict]:
+    """The customer's variant chooser: every orderable member of the product's
+    family (a variant with no logo zone yet can't be ordered). Empty when
+    there is nothing to choose between."""
+    members = [v for v in db.list_variants(product["family"])
+               if v["id"] == product["id"] or db.list_logo_zones(v["id"])]
+    if len(members) < 2:
+        return []
+    return [{"id": v["id"], "label": v["variant_label"] or v["name"],
+             "current": v["id"] == product["id"],
+             "url": url_for("customer_order", product_id=v["id"])} for v in members]
+
+
 def _qr_zone_public(z) -> dict:
     """A QR zone as the customer's page needs it: just the label — where it
     sits and how big is the vendor's business, and is applied server-side."""
@@ -996,6 +1066,7 @@ def api_product(product_id):
     default_model_color = next(iter(part_colors.values()), None)
     return jsonify({
         "name": product["name"],
+        "variants": _variants_public(product),
         "glb_url": url_for("product_glb", product_id=product_id),
         "bounds": json.loads(product["bounds_json"]),
         # Logo zones only: QR codes have their own list below.

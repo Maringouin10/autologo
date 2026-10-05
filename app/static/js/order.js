@@ -913,6 +913,26 @@ function updateSubmitState() {
   status.classList.toggle("ready", allReady);
 }
 
+// --- variants ---------------------------------------------------------------------
+// Variants are separate products of one family (each has its own model and
+// zones), so picking another one is just opening its page.
+function makeVariantChooser(variants) {
+  const el = document.createElement("section");
+  el.className = "zone-block variant-block";
+  el.innerHTML = `<h2>Variante</h2><div class="variant-choices" role="radiogroup" aria-label="Variante"></div>`;
+  const row = el.querySelector(".variant-choices");
+  for (const v of variants) {
+    const a = document.createElement("a");
+    a.className = "variant-choice" + (v.current ? " active" : "");
+    a.href = v.url;
+    a.textContent = v.label;
+    a.setAttribute("role", "radio");
+    a.setAttribute("aria-checked", v.current ? "true" : "false");
+    row.appendChild(a);
+  }
+  return el;
+}
+
 // --- QR codes ---------------------------------------------------------------------
 // The vendor decides where a QR goes and how big it is; the customer only
 // says what it should encode. The server remembers the text and returns the
@@ -1011,16 +1031,19 @@ async function boot() {
     if (!startRes.ok) throw new Error(startData.error || "impossible de démarrer la commande");
     SESSION_ID = startData.order_session_id;
 
-    container.innerHTML = `
+    container.innerHTML = "";
+    if ((product.variants || []).length) container.appendChild(makeVariantChooser(product.variants));
+    container.insertAdjacentHTML("beforeend", `
       <div class="order-intro">
         <b>Comment ça marche</b>
         <ol>
+          ${(product.variants || []).length ? "<li>Choisissez votre variante.</li>" : ""}
           <li>Déposez votre logo au format SVG.</li>
           <li>Glissez-le sur l'objet en 3D et ajustez sa taille.</li>
           ${(product.qr_zones || []).length ? "<li>Saisissez l'adresse de votre QR code.</li>" : ""}
           <li>Choisissez vos couleurs, puis envoyez.</li>
         </ol>
-      </div>`;
+      </div>`);
 
     for (const group of groupZones(product.zones)) {
       const groupEngines = group.map(makeEngine);

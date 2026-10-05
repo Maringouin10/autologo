@@ -826,3 +826,12 @@ input[type=range]::-moz-range-thumb {
 }
 .gallery-swatch.has-shot::after { opacity: 0.45; }
 .gallery-card:hover .gallery-swatch.has-shot { filter: brightness(1.06); }
+
+/* --- variant chooser (customer) ------------------------------------------ */
+.variant-choices { display: flex; flex-wrap: wrap; gap: 8px; }
+.variant-choice {
+  padding: 8px 14px; border-radius: var(--radius-sm, 8px); border: 1px solid var(--border);
+  background: var(--raised); color: var(--text); text-decoration: none; font-weight: 600;
+}
+.variant-choice:hover { border-color: var(--accent); }
+.variant-choice.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }

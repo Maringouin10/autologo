@@ -171,6 +171,25 @@
                value="{{ product['name'] if product else '' }}">
       </div>
       <div class="field">
+        <label for="variant-of">Variante d'un autre produit ?</label>
+        <select id="variant-of">
+          <option value="">Non — produit indépendant</option>
+          {% for o in family_options %}
+          <option value="{{ o['id'] }}" {{ 'selected' if current_variant_of == o['id'] else '' }}>Oui — variante de « {{ o['name'] }} »</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field hidden" id="variant-label-field">
+        <label for="variant-label">Nom de cette variante</label>
+        <input type="text" id="variant-label" placeholder="Avec vis, À coller…"
+               value="{{ product['variant_label'] if product else '' }}" maxlength="60">
+        <p class="hint" style="margin-top:6px">
+          Le client choisit sa variante sur la page du produit, puis personnalise.
+          Chaque variante a son propre modèle 3D et ses propres zones.
+          {% if product and current_variant_of %}Pensez à nommer aussi les autres variantes.{% endif %}
+        </p>
+      </div>
+      <div class="field">
         <label for="export-mode">Ce que reçoit le client</label>
         <select id="export-mode">
           <option value="assembly">Assemblage complet (toutes les pièces)</option>
