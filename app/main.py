@@ -572,6 +572,7 @@ def upload_logo():
     except mw.MeshError as exc:
         sess.logo_path.unlink(missing_ok=True)
         return _err(exc)
+    mw.warm_extrusions(polygons)
 
     minx, miny, maxx, maxy = mw.logo_bounds(polygons)
     return jsonify({
@@ -599,9 +600,11 @@ def edit_logo(session_id):
     sess.flip_v = bool(data.get("flip_v", False))
 
     try:
-        minx, miny, maxx, maxy = mw.logo_bounds(sess.active_logo_polygons())
+        active = sess.active_logo_polygons()
+        minx, miny, maxx, maxy = mw.logo_bounds(active)
     except mw.MeshError as exc:
         return _err(exc)
+    mw.warm_extrusions(active)   # a mirrored logo is new shapes to triangulate
     return jsonify({
         "ok": True,
         "logo_bounds": {"width": round(float(maxx - minx), 2),
@@ -1130,6 +1133,7 @@ def order_upload_logo(order_session_id, zone_id):
     except mw.MeshError as exc:
         work.logo_path.unlink(missing_ok=True)
         return _err(exc)
+    mw.warm_extrusions(polygons)
 
     minx, miny, maxx, maxy = mw.logo_bounds(polygons)
     return jsonify({
@@ -1162,9 +1166,11 @@ def order_edit_logo(order_session_id, zone_id):
         except ValueError as exc:
             return _err(exc)
     try:
-        minx, miny, maxx, maxy = mw.logo_bounds(work.active_logo_polygons())
+        active = work.active_logo_polygons()
+        minx, miny, maxx, maxy = mw.logo_bounds(active)
     except mw.MeshError as exc:
         return _err(exc)
+    mw.warm_extrusions(active)   # a mirrored logo is new shapes to triangulate
     return jsonify({
         "ok": True,
         "logo_bounds": {"width": round(float(maxx - minx), 2),

@@ -132,8 +132,9 @@ function loadModelGlb(url, bounds) {
   }, undefined, (err) => setError("échec du chargement du modèle 3D: " + err.message));
 }
 
-function loadPreviewGlb(arrayBuffer) {
+function loadPreviewGlb(arrayBuffer, seq) {
   gltfLoader.parse(arrayBuffer, "", (gltf) => {
+    if (seq !== previewSeq) return;   // a newer preview already replaced this one
     if (previewObject) scene.remove(previewObject);
     let mesh = null;
     gltf.scene.traverse((obj) => { if (!mesh && obj.isMesh) mesh = obj; });
@@ -350,6 +351,11 @@ function updateReadout() {
 }
 
 let previewTimer = null;
+// Only the latest preview matters: a slider dragged across a complicated
+// logo would otherwise queue a request per step, and an older answer
+// arriving last would snap the logo back to where it was.
+let previewSeq = 0;
+let previewAbort = null;
 function schedulePreview() {
   updateReadout();
   if (previewTimer) clearTimeout(previewTimer);
@@ -359,22 +365,27 @@ function schedulePreview() {
 async function requestPreview() {
   if (!state.sessionId || state.faceIndex == null) return;
   const placement = currentPlacement();
+  const seq = ++previewSeq;
+  if (previewAbort) previewAbort.abort();
+  previewAbort = new AbortController();
   try {
     const res = await fetch(`/api/session/${state.sessionId}/preview`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(placement),
+      body: JSON.stringify(placement), signal: previewAbort.signal,
     });
     if (!res.ok) {
       const data = await readJson(res);
       throw new Error(data.error || "échec de l'aperçu");
     }
     const buf = await res.arrayBuffer();
-    loadPreviewGlb(buf);
+    if (seq !== previewSeq) return;
+    loadPreviewGlb(buf, seq);
     // The freshly loaded mesh's vertices already bake in this exact offset,
     // so instantaneous drag-feedback (see applyDragOffset) starts measuring
     // its on-screen delta from here, not from (0,0).
     previewBaseOffset = { x: placement.offset_x_mm, y: placement.offset_y_mm };
   } catch (err) {
+    if (err.name === "AbortError") return;
     setError(err.message);
   }
 }

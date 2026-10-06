@@ -301,17 +301,39 @@ function makeEngine(z) {
     return data;
   };
 
+  // Only the latest preview matters: a slider dragged across a complicated
+  // logo would otherwise queue a request per step, and an older answer
+  // arriving last would snap the logo back to where it was.
+  let previewSeq = 0;
+  let previewAbort = null;
   engine.refreshPreview = async () => {
     if (!engine.hasLogo) return;
     const placement = { ...engine.placement };
-    const res = await fetch(`/api/order/session/${SESSION_ID}/zone/${z.id}/preview`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(placement),
-    });
+    const seq = ++previewSeq;
+    if (previewAbort) previewAbort.abort();
+    previewAbort = new AbortController();
+    let res;
+    try {
+      res = await fetch(`/api/order/session/${SESSION_ID}/zone/${z.id}/preview`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(placement), signal: previewAbort.signal,
+      });
+    } catch (err) {
+      if (err.name === "AbortError") return;
+      throw err;
+    }
     if (!res.ok) { const d = await readJson(res); throw new Error(d.error || "échec de l'aperçu"); }
-    const buf = await res.arrayBuffer();
+    let buf;
+    try {
+      buf = await res.arrayBuffer();
+    } catch (err) {
+      if (err.name === "AbortError") return;
+      throw err;
+    }
+    if (seq !== previewSeq) return;
     await new Promise((resolve) => {
       new GLTFLoader().parse(buf, "", (gltf) => {
+        if (seq !== previewSeq) { resolve(); return; }
         if (engine.previewObject) {
           scene.remove(engine.previewObject);
           dragRegistry.delete(engine.previewObject);

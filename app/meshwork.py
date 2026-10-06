@@ -15,6 +15,8 @@ import io
 import logging
 import math
 import re
+import threading
+import weakref
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass, field
@@ -576,6 +578,43 @@ def _hex_to_rgb(h: str) -> tuple[int, int, int]:
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
+# How finely a logo's outlines are kept, as a fraction of its longer side:
+# 1/5000 is 0.01 mm on a 50 mm logo, 0.04 mm on a 200 mm one — far below
+# what a 0.4 mm nozzle can draw.
+SIMPLIFY_FRACTION = 1.0 / 5000.0
+
+
+def _simplify_shapes(shapes: list) -> list:
+    """Drop the outline points no printer could ever tell apart.
+
+    The SVG parser flattens every curve into a fixed number of segments
+    whatever its size, so a detailed logo routinely comes through with
+    hundreds of thousands of points — and every one of them became wall
+    triangles in the preview, in the cutting tool, and in the 3MF. That is
+    what made a complicated logo take seconds per slider tweak and tens of
+    seconds to engrave. Douglas-Peucker at a tolerance tied to the logo's
+    own size keeps the shape exactly as printed and typically removes ~90%
+    of the points. A piece that simplification would break is kept as is."""
+    if not shapes:
+        return shapes
+    minx, miny, maxx, maxy = logo_bounds(shapes)
+    tolerance = max(maxx - minx, maxy - miny) * SIMPLIFY_FRACTION
+    if tolerance <= 0:
+        return shapes
+    out = []
+    for s in shapes:
+        try:
+            simple = s.polygon.simplify(tolerance, preserve_topology=True)
+        except Exception:
+            simple = None
+        if (getattr(simple, "geom_type", "") == "Polygon" and _is_usable_polygon(simple)
+                and len(simple.exterior.coords) >= 4):
+            out.append(LogoShape(simple, s.color))
+        else:
+            out.append(s)
+    return out
+
+
 def _flatten_overlaps(shapes: list) -> list:
     """Make the shapes cover the artwork the way it is actually drawn.
 
@@ -700,7 +739,7 @@ def load_logo(path: str) -> list:
             polys = [poly for poly in polys if _is_usable_polygon(poly)]
         shapes.extend(LogoShape(p, color) for p in polys)
 
-    shapes = _flatten_overlaps(shapes)
+    shapes = _flatten_overlaps(_simplify_shapes(shapes))
     if not shapes:
         if failures:
             raise MeshError(
@@ -919,7 +958,13 @@ def fit_to_face(shapes: list, face: "FaceInfo", margin_mm: float = 1.0,
     if usable.is_empty:
         usable = region  # the margin alone ate the whole region — still better than refusing
 
-    logo_union = unary_union([s.polygon for s in shapes])
+    # Holes can't stick out of anything: only the outer outlines decide
+    # whether the logo fits, and dropping the rest makes every one of the
+    # thousand containment checks below much cheaper on a detailed logo.
+    # (The region itself is an outer outline too — see _region_outline.)
+    logo_union = unary_union([ShapelyPolygon(s.polygon.exterior) for s in shapes])
+    logo_union = unary_union([ShapelyPolygon(g.exterior)
+                              for g in getattr(logo_union, "geoms", [logo_union])])
     minx, miny, maxx, maxy = logo_union.bounds
     orig_longer = max(maxx - minx, maxy - miny, 1e-6)
     centered = affinity.translate(logo_union, xoff=-(minx + maxx) / 2.0, yoff=-(miny + maxy) / 2.0)
@@ -933,6 +978,7 @@ def fit_to_face(shapes: list, face: "FaceInfo", margin_mm: float = 1.0,
             shape = affinity.translate(shape, xoff=center[0], yoff=center[1])
         return usable.contains(shape)
 
+    shapely.prepare(usable)   # the same region is tested ~1000 times
     ubx0, uby0, ubx1, uby1 = usable.bounds
     # Generously large — just needs to be past any scale that could
     # possibly fit, so the binary search always converges on the real edge.
@@ -1284,10 +1330,63 @@ def _placement_matrix(shapes: list, params: PlacementParams) -> list[float]:
     return [a, b, d, e, xoff, yoff]
 
 
+# Each shape's extrusion at height 1, in the SVG's own coordinates, kept for
+# as long as the polygon itself is alive (i.e. while its session caches it).
+_unit_extrusions: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+_unit_lock = threading.Lock()
+
+
+def _unit_extrusion(polygon) -> tuple[np.ndarray, np.ndarray]:
+    """(vertices, faces) of `polygon` extruded to a height of 1, in its own
+    coordinates.
+
+    Triangulating a detailed logo is by far the slowest part of a preview —
+    and it never changes while the customer drags a slider: moving, turning
+    and resizing a logo is an affine map, and so is stretching its height,
+    so the solid built once maps exactly onto any placement. Only a
+    mirroring map would turn the solid inside out, and placement never
+    mirrors (flipping is done to the polygons themselves)."""
+    with _unit_lock:
+        cached = _unit_extrusions.get(polygon)
+    if cached is None:
+        mesh = _extrude_polygon(polygon, 1.0)
+        cached = (np.asarray(mesh.vertices, dtype=np.float64).copy(),
+                  np.asarray(mesh.faces, dtype=np.int64).copy())
+        with _unit_lock:
+            _unit_extrusions[polygon] = cached
+    return cached
+
+
+def warm_extrusions(shapes: list) -> None:
+    """Triangulate `shapes` in the background, so the first preview after a
+    logo is uploaded (or mirrored) doesn't pay for it while the customer is
+    still looking at the shape picker or clicking a face."""
+    def run():
+        for s in shapes:
+            try:
+                _unit_extrusion(s.polygon)
+            except Exception:
+                pass   # the preview itself will report it properly
+    threading.Thread(target=run, daemon=True).start()
+
+
 def _extrude_shapes(shapes: list, matrix: list[float], height: float) -> trimesh.Trimesh:
-    parts = [_extrude_polygon(affinity.affine_transform(s.polygon, matrix), height)
-             for s in shapes]
-    return trimesh.util.concatenate(parts) if len(parts) > 1 else parts[0]
+    a, b, d, e, xoff, yoff = matrix
+    vertex_blocks, face_blocks, offset = [], [], 0
+    for s in shapes:
+        vertices, faces = _unit_extrusion(s.polygon)
+        vertex_blocks.append(vertices)
+        face_blocks.append(faces + offset)
+        offset += len(vertices)
+    unit = np.vstack(vertex_blocks)
+    placed = np.empty_like(unit)
+    placed[:, 0] = a * unit[:, 0] + b * unit[:, 1] + xoff
+    placed[:, 1] = d * unit[:, 0] + e * unit[:, 1] + yoff
+    placed[:, 2] = unit[:, 2] * height
+    faces = np.vstack(face_blocks)
+    if a * e - b * d < 0:
+        faces = faces[:, ::-1]   # a mirroring map flips the winding — undo it
+    return trimesh.Trimesh(vertices=placed, faces=faces, process=False)
 
 
 def _logo_local_mesh(shapes: list, params: PlacementParams, height: float) -> trimesh.Trimesh:

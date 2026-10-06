@@ -379,6 +379,11 @@ instant.
 - The live preview never runs a boolean operation (it just shows where the
   logo will sit) — only **Export** in *gravé* mode runs the actual cut, so
   slider dragging stays fast even on a large model.
+- **Complicated logos** stay fast too: outlines are simplified on import to
+  1/5000 of the logo's size (0.01 mm on a 50 mm logo — invisible once
+  printed), each shape is triangulated once and then only moved/scaled for
+  every preview and export, and the browser drops a stale preview request
+  as soon as a newer one is sent.
 - A **3MF** with real per-part color (`<basematerials>`/`<m:colorgroup>`
   display colors — set in your slicer/CAD tool) shows that color in every
   viewer and as the gallery card's swatch, instead of the flat default gray.

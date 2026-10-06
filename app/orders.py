@@ -31,6 +31,7 @@ class ZoneWork:
     zone_id: int
     dir: Path
     _logo_polygons: list | None = field(default=None, repr=False)
+    _active_cache: tuple | None = field(default=None, repr=False)
     excluded_shapes: set = field(default_factory=set)
     flip_h: bool = False
     flip_v: bool = False
@@ -54,6 +55,17 @@ class ZoneWork:
         return self._logo_polygons
 
     def active_logo_polygons(self) -> list:
+        # Kept between calls so the very same shapes come back on every
+        # slider tweak: their extrusion is cached on them (see
+        # meshwork._unit_extrusion), and a flip would otherwise rebuild them.
+        key = (id(self.logo_polygons()), frozenset(self.excluded_shapes), self.flip_h, self.flip_v)
+        if self._active_cache is not None and self._active_cache[0] == key:
+            return self._active_cache[1]
+        active = self._compute_active_polygons()
+        self._active_cache = (key, active)
+        return active
+
+    def _compute_active_polygons(self) -> list:
         polys = self.logo_polygons()
         active = [p for i, p in enumerate(polys) if i not in self.excluded_shapes]
         if not active:
@@ -62,6 +74,7 @@ class ZoneWork:
 
     def invalidate_logo(self) -> None:
         self._logo_polygons = None
+        self._active_cache = None
         self.excluded_shapes = set()
         self.flip_h = False
         self.flip_v = False
