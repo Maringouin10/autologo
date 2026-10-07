@@ -379,6 +379,11 @@ instant.
 - The live preview never runs a boolean operation (it just shows where the
   logo will sit) — only **Export** in *gravé* mode runs the actual cut, so
   slider dragging stays fast even on a large model.
+- **Two pages per logo**: importing an SVG opens a full-screen editor (the
+  big clickable logo, its pieces, one-click cleanups, mirror) — *Continuer
+  vers l'aperçu 3D* (or Échap) then hands over to the 3D view, where the
+  sidebar keeps a thumbnail and a button to reopen the editor. Same flow
+  on the plain tool and on the customer order page.
 - **Complicated logos** stay fast too: outlines are simplified on import to
   1/5000 of the logo's size (0.01 mm on a 50 mm logo — invisible once
   printed), each shape is triangulated once and then only moved/scaled for

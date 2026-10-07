@@ -70,16 +70,27 @@ function logoSvg(shapes, { excluded, colorOf, interactive = false }) {
     `${interactive ? ' class="is-interactive"' : ""}>${paths}</svg>`;
 }
 
-/** One card's thumbnail: this piece in place, the rest of the logo ghosted. */
-function cardSvg(shape, shapes, colorOf) {
+/** The whole logo as a standalone image, for the cards' ghosted backdrop.
+ * Drawn once and shared: inlining it into every card meant N copies of N
+ * paths — over a million on a detailed logo, enough to freeze the page. */
+let ghostUrl = null;
+function ghostImageUrl(shapes, colorOf) {
+  if (ghostUrl) URL.revokeObjectURL(ghostUrl);
   const frame = logoFrame(shapes);
-  const others = shapes
-    .filter((s) => s.index !== shape.index)
-    .map((s) => `<path class="ghost" fill="${escapeAttr(colorOf(s))}" fill-rule="evenodd"` +
-                 ` d="${ringsToPathD(s.rings)}"/>`)
-    .join("");
-  return `<svg viewBox="${frame.viewBox}" preserveAspectRatio="xMidYMid meet">${others}` +
-    `<path fill="${escapeAttr(colorOf(shape))}" fill-rule="evenodd" d="${ringsToPathD(shape.rings)}"/></svg>`;
+  const paths = shapes.map((s) =>
+    `<path fill="${escapeAttr(colorOf(s))}" fill-rule="evenodd" d="${ringsToPathD(s.rings)}"/>`).join("");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${frame.viewBox}"` +
+    ` preserveAspectRatio="xMidYMid meet">${paths}</svg>`;
+  ghostUrl = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+  return ghostUrl;
+}
+
+/** One card's thumbnail: this piece in place, the rest of the logo ghosted. */
+function cardThumb(shape, shapes, colorOf, ghost) {
+  const frame = logoFrame(shapes);
+  return `<span class="shape-thumb"><img class="ghost" alt="" src="${ghost}">` +
+    `<svg viewBox="${frame.viewBox}" preserveAspectRatio="xMidYMid meet">` +
+    `<path fill="${escapeAttr(colorOf(shape))}" fill-rule="evenodd" d="${ringsToPathD(shape.rings)}"/></svg></span>`;
 }
 
 function highlight(previewHost, index) {
@@ -180,6 +191,7 @@ export function renderLogoEditor({
   }
 
   const grid = listHost.querySelector(".shape-list");
+  const ghost = ghostImageUrl(shapes, colorOf);
   for (const shape of shapes) {
     const off = excluded.has(shape.index);
     const card = document.createElement("label");
@@ -192,7 +204,7 @@ export function renderLogoEditor({
         : isCrumb(shape, shapes)
           ? '<span class="shape-flag" title="Forme minuscule — souvent un résidu du tracé.">miette</span>'
           : "") +
-      `</span>` + cardSvg(shape, shapes, colorOf);
+      `</span>` + cardThumb(shape, shapes, colorOf, ghost);
     card.querySelector("input").addEventListener("change", (e) => {
       onToggle?.(shape.index, e.target.checked);
     });

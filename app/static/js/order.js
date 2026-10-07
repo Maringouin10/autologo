@@ -6,6 +6,7 @@ import {
   wireRotationPresets,
 } from "./ui.js";
 import { renderLogoEditor } from "./logo-editor.js";
+import { makeStudio } from "./svg-studio.js";
 
 const PRODUCT_ID = document.body.dataset.productId;
 
@@ -378,9 +379,9 @@ function makeControls(groupEngines, { title, compact = false }) {
       <span class="dz-sub">Fichier .svg</span>
     </label>
     <div class="zone-edit hidden">
-      <p class="hint">Décochez une forme — ou cliquez-la dans l'aperçu — pour l'exclure.</p>
-      <div class="zone-shape-list"></div>
-      <div class="flip-row">
+      <p class="hint studio-only">Décochez une forme — ou cliquez-la dans l'aperçu — pour l'exclure.</p>
+      <div class="zone-shape-list studio-only studio-list"></div>
+      <div class="flip-row studio-only">
         <button type="button" class="toggle-btn zone-flip-h">⇋ Miroir H</button>
         <button type="button" class="toggle-btn zone-flip-v">⇵ Miroir V</button>
       </div>
@@ -429,6 +430,10 @@ function makeControls(groupEngines, { title, compact = false }) {
 
   const lead = groupEngines[0];
   const status = el.querySelector(".zone-status");
+  // Page 1 of a logo: cleaning it up, full screen. Page 2 is the 3D view.
+  const studio = makeStudio(el.querySelector(".zone-edit"), {
+    title: title || lead.label || "Votre logo",
+  });
   const sliders = {
     width: el.querySelector(".zone-width"), rot: el.querySelector(".zone-rot"),
     dx: el.querySelector(".zone-dx"), dy: el.querySelector(".zone-dy"),
@@ -530,6 +535,7 @@ function makeControls(groupEngines, { title, compact = false }) {
       el.querySelector(".zone-placement").classList.remove("hidden");
       status.textContent = "✓ Logo placé — ajustez-le à votre goût";
       status.classList.add("ready");
+      studio.open();
       await pushEditAll();
       await refreshAll();
       renderColorPanel();
@@ -1060,7 +1066,7 @@ async function boot() {
         <b>Comment ça marche</b>
         <ol>
           ${(product.variants || []).length ? "<li>Choisissez votre variante.</li>" : ""}
-          <li>Déposez votre logo au format SVG.</li>
+          <li>Déposez votre logo au format SVG et retouchez-le en plein écran.</li>
           <li>Glissez-le sur l'objet en 3D et ajustez sa taille.</li>
           ${(product.qr_zones || []).length ? "<li>Saisissez l'adresse de votre QR code.</li>" : ""}
           <li>Choisissez vos couleurs, puis envoyez.</li>

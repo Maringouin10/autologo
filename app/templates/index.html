@@ -50,17 +50,19 @@
 
     <section class="step" id="step-logo-edit" disabled>
       <h2><span class="step-num"><span class="num">3</span></span> Retoucher le logo</h2>
-      <p class="hint">
-        Décochez une forme pour l'exclure — pratique pour un fond, un élément
-        en trop, ou l'intérieur d'un « O » ressorti en pièce pleine.
-      </p>
-      <div id="shape-list" class="shape-list"></div>
-      <div class="flip-row">
-        <button type="button" class="toggle-btn" id="flip-h-btn">⇋ Miroir H</button>
-        <button type="button" class="toggle-btn" id="flip-v-btn">⇵ Miroir V</button>
-      </div>
-      <div class="combined-preview" id="combined-preview-wrap">
-        <svg id="combined-preview"></svg>
+      <div id="logo-studio">
+        <p class="hint studio-only">
+          Décochez une forme pour l'exclure — pratique pour un fond, un élément
+          en trop, ou l'intérieur d'un « O » ressorti en pièce pleine.
+        </p>
+        <div id="shape-list" class="studio-only studio-list"></div>
+        <div class="flip-row studio-only">
+          <button type="button" class="toggle-btn" id="flip-h-btn">⇋ Miroir H</button>
+          <button type="button" class="toggle-btn" id="flip-v-btn">⇵ Miroir V</button>
+        </div>
+        <div class="combined-preview" id="combined-preview-wrap">
+          <svg id="combined-preview"></svg>
+        </div>
       </div>
     </section>
 

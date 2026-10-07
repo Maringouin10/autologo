@@ -5,6 +5,7 @@ import {
   readJson, wireDropzone, markDropzoneFilled, enableStep, markStepDone,
   setBusy, toastError, toastOk, wireRotationPresets,
 } from "./ui.js";
+import { makeStudio } from "./svg-studio.js";
 import { renderLogoEditor } from "./logo-editor.js";
 
 // --- three.js scene setup ----------------------------------------------------
@@ -226,6 +227,8 @@ wireDropzone(logoDrop, logoInput, async (file) => {
     markStepDone("step-logo");
     enableStep("step-logo-edit", true);
     enableStep("step-face", true);
+    // Page 1: the logo on its own, full screen. The 3D view comes after.
+    logoStudio.open();
   } catch (err) {
     logoInfo.textContent = "";
     setError(err.message);
@@ -240,6 +243,15 @@ wireDropzone(logoDrop, logoInput, async (file) => {
 // Every change is snapshotted first, so "Annuler" can put the previous
 // selection back — cleaning a logo is trial and error.
 const editHistory = [];
+
+const logoStudio = makeStudio(document.getElementById("logo-studio"), {
+  title: "Préparez votre logo",
+  onClose: () => {
+    if (state.faceIndex == null) {
+      hintEl.textContent = "Cliquez sur une face plate du modèle pour y placer le logo.";
+    }
+  },
+});
 
 function applyEdit(mutate) {
   editHistory.push(new Set(state.excluded));
