@@ -248,6 +248,12 @@ def tool():
     return render_template("index.html")
 
 
+@app.route("/keychain")
+@login_required
+def keychain_tool():
+    return render_template("keychain.html")
+
+
 # --- admin pages ---------------------------------------------------------------
 @app.route("/admin")
 @login_required
@@ -730,6 +736,90 @@ def export(session_id):
     if repairs:
         response.headers["X-Autologo-Repairs"] = ", ".join(repairs)
     return response
+
+
+# --- keychain: a plate cut around the logo, no model needed ----------------------
+def _keychain_params(data: dict) -> mw.KeychainParams:
+    def num(key, default, lo, hi):
+        return min(hi, max(lo, float(data.get(key, default))))
+    return mw.KeychainParams(
+        width_mm=num("width_mm", 40.0, 5.0, 300.0),
+        border_mm=num("border_mm", 3.0, 0.5, 30.0),
+        base_mm=num("base_mm", 3.0, 0.4, 20.0),
+        relief_mm=num("relief_mm", 1.2, 0.2, 10.0),
+        ring=bool(data.get("ring", True)),
+        ring_angle_deg=float(data.get("ring_angle_deg", 90.0)) % 360.0,
+        hole_mm=num("hole_mm", 5.0, 1.0, 30.0),
+        ring_wall_mm=num("ring_wall_mm", 2.5, 1.0, 15.0),
+        fill_holes=bool(data.get("fill_holes", True)),
+    )
+
+
+def _keychain_color(data: dict) -> str:
+    color = str(data.get("base_color") or "").strip().lower()
+    return color if re.fullmatch(r"#[0-9a-f]{6}", color) else "#f2f2f2"
+
+
+def _build_keychain(session_id: str):
+    sess = _require_session(session_id)
+    if not sess.logo_path.exists():
+        raise mw.MeshError("aucun logo importé pour cette session")
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        params = _keychain_params(data)
+    except (TypeError, ValueError) as exc:
+        raise mw.MeshError(f"paramètres invalides ({exc})") from exc
+    base, logos, size = mw.keychain(sess.active_logo_polygons(), params)
+    return sess, data, base, logos, size
+
+
+@app.route("/api/keychain/logo", methods=["POST"])
+@login_required
+def keychain_upload_logo():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return _err(ValueError("aucun fichier reçu"))
+    if not f.filename.lower().endswith(".svg"):
+        return _err(ValueError("le logo doit être un fichier .svg"))
+    sess = store.create()
+    sess.logo_name = f.filename
+    f.save(str(sess.logo_path))
+    try:
+        shapes = sess.logo_polygons()
+    except mw.MeshError as exc:
+        return _err(exc)
+    return jsonify({"session_id": sess.id, "shapes": mw.shapes_payload(shapes)})
+
+
+@app.route("/api/keychain/<session_id>/preview", methods=["POST"])
+@login_required
+def keychain_preview(session_id):
+    try:
+        _, data, base, logos, size = _build_keychain(session_id)
+        mesh = mw.keychain_preview(base, logos, _keychain_color(data))
+    except mw.MeshError as exc:
+        return _err(exc)
+    response = _mesh_to_glb_response(mesh)
+    response.headers["X-Keychain-Size"] = f"{size[0]}x{size[1]}"
+    return response
+
+
+@app.route("/api/keychain/<session_id>/export", methods=["POST"])
+@login_required
+def keychain_export(session_id):
+    try:
+        sess, data, base, logos, _ = _build_keychain(session_id)
+        named = {"porte-cle": base}
+        named.update(_named_logo_meshes(logos, "logo"))
+        colors = {"porte-cle": _keychain_color(data)}
+        colors.update({name: color for name, color in
+                       zip(list(named)[1:], logos.keys())})
+        data_3mf = mw.export_3mf(named, colors)
+    except mw.MeshError as exc:
+        return _err(exc)
+    stem = os.path.splitext(sess.logo_name or "")[0]
+    return send_file(io.BytesIO(data_3mf), mimetype="model/3mf", as_attachment=True,
+                      download_name=f"{_slug(stem, 'logo')}_porte-cle.3mf")
 
 
 # --- admin: assembly upload + zone builder --------------------------------------

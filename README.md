@@ -21,6 +21,8 @@ does three things:
 - **The plain tool** (`/tool`, password-protected): upload any single-part
   3D model + an SVG logo, position it, export. Good for one-off jobs that
   don't need a product page at all.
+- **Custom keychain** (`/keychain`, password-protected): upload just an SVG —
+  a plate is cut around it, with a ring for the key ring, ready to export.
 
 ## Quick start
 
@@ -128,6 +130,28 @@ each with a **⬇ 3MF** button: the piece exactly as you uploaded it — no logo
 no QR code, whatever zones are set up — so you can print the parts of an
 assembly separately. The file is named `<produit>_<pièce>.3mf` and keeps the
 part's own color if your 3MF had one.
+
+## Custom keychain
+
+`/keychain` (also linked from **/admin** and the plain tool) needs no 3D model:
+drop an SVG and the keychain is built around it.
+
+- The **plate** is the logo's own outline grown by the *marge du contour*,
+  with rounded corners. A logo made of separate pieces (an icon next to a
+  word) is bridged into one plate. *Contour plein* (on by default) fills the
+  counters (the inside of an « O ») in the plate; off, they stay open.
+- The **ring** is a tab placed in the chosen direction (Haut / Droite / Bas /
+  Gauche presets, or any angle), pushed just outside the plate and always
+  clear of the logo, with a fillet where it joins. Hole diameter and the wall
+  around it are adjustable; it can be turned off.
+- The **logo** stands on the plate in relief (sunk 0.2 mm into it so they
+  bond), one object per SVG color, plus the plate in the color you pick: the
+  3MF is ready for a multi-material slicer.
+- The logo edit step (exclude shapes, mirror) is the same as everywhere else.
+
+Everything is built in 2D (shapely offsets and unions) and extruded at the end
+— no boolean on meshes, so every part is watertight by construction.
+`tests/test_keychain.py` covers it.
 
 ## How the plain tool works
 

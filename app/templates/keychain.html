@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}AutoLogo — Custom keychain{% endblock %}
+
+{% block head %}
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+{% endblock %}
+
+{% block header %}
+<header class="topbar">
+  <a class="brand" href="{{ url_for('admin_home') }}"><span class="brand-mark">🏷️</span> <span>AutoLogo</span></a>
+  <span class="topbar-sub">Custom keychain — un logo, un contour, un 3MF</span>
+  <nav class="topbar-actions">
+    <a class="nav-link" href="{{ url_for('tool') }}">🛠️ Outil simple</a>
+    <a class="nav-link" href="{{ url_for('admin_home') }}">← Mes produits</a>
+    <a class="logout" href="{{ url_for('logout') }}">Déconnexion</a>
+  </nav>
+</header>
+{% endblock %}
+
+{% block content %}
+<main class="layout">
+  <aside class="panel">
+    <section class="step" id="step-logo">
+      <h2><span class="step-num"><span class="num">1</span></span> Logo</h2>
+      <label class="dropzone" id="logo-drop">
+        <input type="file" id="logo-input" accept=".svg" hidden>
+        <span class="dz-icon">🎨</span>
+        <span class="dz-main">Cliquez ou déposez votre logo</span>
+        <span class="dz-sub">Fichier .svg — le contour est tracé tout autour</span>
+      </label>
+    </section>
+
+    <section class="step" id="step-logo-edit" disabled>
+      <h2><span class="step-num"><span class="num">2</span></span> Retoucher le logo</h2>
+      <p class="hint">Excluez un fond ou une forme en trop — le contour suit ce qui reste.</p>
+      <div id="shape-list"></div>
+      <div class="flip-row">
+        <button type="button" class="toggle-btn" id="flip-h-btn">⇋ Miroir H</button>
+        <button type="button" class="toggle-btn" id="flip-v-btn">⇵ Miroir V</button>
+      </div>
+      <div class="combined-preview" id="combined-preview-wrap">
+        <svg id="combined-preview"></svg>
+      </div>
+    </section>
+
+    <section class="step" id="step-shape" disabled>
+      <h2><span class="step-num"><span class="num">3</span></span> Porte-clé</h2>
+      <div class="field">
+        <label for="kc-width">Largeur du logo <span id="kc-width-val" class="val"></span></label>
+        <input type="range" id="kc-width" min="10" max="120" step="1" value="40">
+      </div>
+      <div class="field">
+        <label for="kc-border">Marge du contour <span id="kc-border-val" class="val"></span></label>
+        <input type="range" id="kc-border" min="0.5" max="12" step="0.5" value="3">
+      </div>
+      <div class="field">
+        <label for="kc-base">Épaisseur du socle <span id="kc-base-val" class="val"></span></label>
+        <input type="range" id="kc-base" min="1" max="8" step="0.2" value="3">
+      </div>
+      <div class="field">
+        <label for="kc-relief">Relief du logo <span id="kc-relief-val" class="val"></span></label>
+        <input type="range" id="kc-relief" min="0.2" max="4" step="0.1" value="1.2">
+      </div>
+      <label class="opt" style="margin-bottom:10px">
+        <input type="checkbox" id="kc-fill" checked>
+        <span class="opt-body">
+          <b>Contour plein</b>
+          <small>Bouche les trous du logo (l'intérieur d'un « O ») dans le socle.</small>
+        </span>
+      </label>
+      <label class="opt" style="margin-bottom:14px">
+        <input type="checkbox" id="kc-ring" checked>
+        <span class="opt-body">
+          <b>Anneau</b>
+          <small>Une attache percée pour l'anneau du porte-clé.</small>
+        </span>
+      </label>
+      <div id="ring-fields">
+        <div class="field">
+          <label for="kc-angle">Position de l'anneau <span id="kc-angle-val" class="val"></span></label>
+          <div class="rot-presets" id="ring-presets">
+            <button type="button" data-deg="90">Haut</button>
+            <button type="button" data-deg="0">Droite</button>
+            <button type="button" data-deg="270">Bas</button>
+            <button type="button" data-deg="180">Gauche</button>
+          </div>
+          <input type="range" id="kc-angle" min="0" max="359" step="1" value="90">
+        </div>
+        <div class="field">
+          <label for="kc-hole">Diamètre du trou <span id="kc-hole-val" class="val"></span></label>
+          <input type="range" id="kc-hole" min="2" max="12" step="0.5" value="5">
+        </div>
+        <div class="field">
+          <label for="kc-wall">Épaisseur autour du trou <span id="kc-wall-val" class="val"></span></label>
+          <input type="range" id="kc-wall" min="1" max="8" step="0.5" value="2.5">
+        </div>
+      </div>
+      <div class="field">
+        <label for="kc-color">Couleur du socle</label>
+        <input type="color" id="kc-color" value="#f2f2f2">
+      </div>
+      <p class="hint" id="kc-size"></p>
+    </section>
+
+    <section class="step" id="step-export" disabled>
+      <button id="export-btn" class="btn btn-primary btn-block btn-lg">⬇ Exporter en 3MF</button>
+      <p class="hint" style="margin-top:10px">
+        Le socle et chaque couleur du logo sont des objets séparés : assignez
+        un filament à chacun dans votre trancheur.
+      </p>
+    </section>
+  </aside>
+
+  <div class="viewer-wrap">
+    <div id="viewer"></div>
+    <div id="viewer-hint" class="viewer-hint">Importez un logo SVG pour commencer.</div>
+    <div class="viewer-tools">
+      <button type="button" class="icon-btn" id="view-reset" title="Recentrer la vue" aria-label="Recentrer la vue">⟳</button>
+      <button type="button" class="icon-btn" id="view-full" title="Plein écran" aria-label="Plein écran">⛶</button>
+    </div>
+  </div>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script type="module" src="{{ url_for('static', filename='js/keychain.js') }}"></script>
+{% endblock %}

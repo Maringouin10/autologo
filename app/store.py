@@ -133,9 +133,11 @@ def get(session_id: str) -> Session | None:
     if not sdir.is_dir():
         return None
     model_files = [p for p in sdir.glob("model.*")]
-    if not model_files:
+    # A keychain session has a logo and no model at all.
+    if not model_files and not (sdir / "logo.svg").exists():
         return None
-    sess = Session(id=session_id, dir=sdir, model_ext=model_files[0].suffix)
+    sess = Session(id=session_id, dir=sdir,
+                   model_ext=model_files[0].suffix if model_files else None)
     if (sdir / "logo.svg").exists():
         sess.logo_name = "logo.svg"
     with _lock:

@@ -1519,6 +1519,172 @@ def deboss(base: trimesh.Trimesh, shapes: list, face: FaceInfo, params: Placemen
     return pocketed, fills
 
 
+# --- keychain ------------------------------------------------------------------
+# The "porte-clé" mode needs no model at all: the plate IS the logo's own
+# outline, grown by a border, with a ring tab for the key ring. Everything is
+# built in 2D with shapely (offset, union, the hole) and only extruded at the
+# end, so it is boolean-free and watertight by construction.
+
+@dataclass
+class KeychainParams:
+    width_mm: float = 40.0       # the logo's longer side
+    border_mm: float = 3.0       # how far the plate extends past the logo
+    base_mm: float = 3.0         # plate thickness
+    relief_mm: float = 1.2       # logo height above the plate
+    ring: bool = True
+    ring_angle_deg: float = 90.0  # where the ring sits: 0 = right, 90 = top
+    hole_mm: float = 5.0         # key-ring hole diameter
+    ring_wall_mm: float = 2.5    # material around the hole
+    fill_holes: bool = True      # plate solid under the logo's counters
+
+
+KEYCHAIN_SINK_MM = 0.2   # logo buried in the plate so the two bond
+
+
+def _keychain_matrix(shapes: list, width_mm: float) -> list[float]:
+    """SVG coordinates -> plate mm, centred on the origin, y flipped: SVG
+    is y-down, the plate is seen from above (y-up)."""
+    a, b, d, e, xoff, yoff = _placement_matrix(shapes, PlacementParams(width_mm=width_mm))
+    return [a, b, -d, -e, xoff, -yoff]
+
+
+def _polygons_in(geom) -> list:
+    if geom is None or geom.is_empty:
+        return []
+    if geom.geom_type == "Polygon":
+        return [geom]
+    return [g for g in getattr(geom, "geoms", []) if g.geom_type == "Polygon" and not g.is_empty]
+
+
+def _keychain_plate(logo, border: float, fill_holes: bool):
+    """The logo's union grown by `border`, as ONE polygon. A logo made of
+    separate pieces (a word, an icon next to it) can stay in several bits
+    after the offset; the gaps are then closed with an ever larger
+    morphological closing, and as a last resort the convex hull."""
+    if fill_holes:
+        logo = unary_union([ShapelyPolygon(p.exterior) for p in _polygons_in(logo)])
+    plate = logo.buffer(border, quad_segs=16)
+    # The closing below would plug the logo's counters along with the gaps
+    # between its pieces — keep them to punch back out.
+    counters = [ShapelyPolygon(r) for p in _polygons_in(plate) for r in p.interiors]
+    gap = max(border, 1.0)
+    while len(_polygons_in(plate)) > 1 and gap < 1e4:
+        plate = logo.buffer(border + gap, quad_segs=16).buffer(-gap, quad_segs=16)
+        gap *= 2
+    if len(_polygons_in(plate)) != 1:
+        plate = logo.convex_hull.buffer(border, quad_segs=16)
+    plate = _polygons_in(plate)[0]
+    if fill_holes:
+        return ShapelyPolygon(plate.exterior)
+    if counters:
+        pieces = _polygons_in(plate.difference(unary_union(counters)))
+        plate = max(pieces, key=lambda g: g.area) if pieces else plate
+    return plate
+
+
+def _ring_center(logo, plate, angle_deg: float, r_hole: float, r_out: float):
+    """Where to put the ring: on a ray from the logo's centre at
+    `angle_deg`, past the plate's far edge so the hole sits just outside
+    it — the tab hangs off the edge instead of eating into the logo — and,
+    whatever the plate's shape, never closer to the logo than `r_out`."""
+    minx, miny, maxx, maxy = plate.bounds
+    lminx, lminy, lmaxx, lmaxy = logo.bounds
+    cx, cy = (lminx + lmaxx) / 2.0, (lminy + lmaxy) / 2.0
+    theta = math.radians(angle_deg)
+    dx, dy = math.cos(theta), math.sin(theta)
+    reach = (maxx - minx) + (maxy - miny) + 10 * r_out
+    ray = shapely.LineString([(cx, cy), (cx + dx * reach, cy + dy * reach)])
+    hit = ray.intersection(plate)
+    edge = 0.0
+    for part in getattr(hit, "geoms", [hit]):
+        for x, y in getattr(part, "coords", []):
+            edge = max(edge, (x - cx) * dx + (y - cy) * dy)
+    t = edge + r_hole + 0.5
+    step = max(r_out / 40.0, 0.05)
+    while t < edge + reach:
+        p = ShapelyPoint(cx + dx * t, cy + dy * t)
+        if p.distance(logo) >= r_out:
+            return p
+        t += step
+    return ShapelyPoint(cx + dx * t, cy + dy * t)
+
+
+def keychain(shapes: list, params: KeychainParams) -> tuple[trimesh.Trimesh, dict[str, trimesh.Trimesh], tuple[float, float]]:
+    """Build a keychain around the logo.
+
+    Returns the plate, the logo as raised objects (one per fill color, as
+    for every other export) and the plate's overall size in mm."""
+    if not shapes:
+        raise MeshError("aucune forme de logo à transformer en porte-clé")
+    matrix = _keychain_matrix(shapes, params.width_mm)
+    placed = [LogoShape(affinity.affine_transform(s.polygon, matrix), s.color) for s in shapes]
+    logo = unary_union([s.polygon for s in placed]).buffer(0)
+    if logo.is_empty:
+        raise MeshError("le logo est vide")
+
+    border = max(params.border_mm, 0.5)
+    plate = _keychain_plate(logo, border, params.fill_holes)
+
+    hole = None
+    if params.ring:
+        r_hole = max(params.hole_mm, 1.0) / 2.0
+        r_out = r_hole + max(params.ring_wall_mm, 1.0)
+        center = _ring_center(logo, plate, params.ring_angle_deg, r_hole, r_out)
+        tab = center.buffer(r_out, quad_segs=24)
+        joined = unary_union([plate, tab])
+        # A rounded joint where the tab meets the plate instead of a notch:
+        # a morphological closing fills just the concave corner.
+        fillet = min(border, r_out) * 0.8
+        smoothed = joined.buffer(fillet, quad_segs=16).buffer(-fillet, quad_segs=16)
+        if len(_polygons_in(smoothed)) == 1:
+            joined = smoothed
+        hole = center.buffer(r_hole, quad_segs=32)
+        plate_geom = joined.difference(hole)
+    else:
+        plate_geom = plate
+
+    plate_polys = [q for p in _polygons_in(plate_geom.buffer(0)) for q in _repaired_polygons(p)]
+    if not plate_polys:
+        raise MeshError("le contour du porte-clé n'a pas pu être construit")
+    parts = [_extrude_polygon(p, params.base_mm) for p in plate_polys]
+    base = trimesh.util.concatenate(parts) if len(parts) > 1 else parts[0]
+
+    # The logo never covers the hole (the ring is placed clear of it, but a
+    # thin wall could still bring them together).
+    keep_out = hole.buffer(0.4) if hole is not None else None
+    height = max(params.relief_mm, 0.1) + KEYCHAIN_SINK_MM
+    logos: dict[str, trimesh.Trimesh] = {}
+    for color, group in _by_color(placed).items():
+        polys = []
+        for s in group:
+            geom = s.polygon.difference(keep_out) if keep_out is not None else s.polygon
+            polys += [q for p in _polygons_in(geom) for q in _repaired_polygons(p)]
+        if not polys:
+            continue
+        meshes = [_extrude_polygon(p, height) for p in polys]
+        mesh = trimesh.util.concatenate(meshes) if len(meshes) > 1 else meshes[0]
+        mesh.apply_translation([0.0, 0.0, params.base_mm - KEYCHAIN_SINK_MM])
+        logos[color] = mesh
+
+    minx, miny, maxx, maxy = plate_geom.bounds
+    return base, logos, (round(maxx - minx, 1), round(maxy - miny, 1))
+
+
+def keychain_preview(base: trimesh.Trimesh, logos: dict[str, trimesh.Trimesh],
+                      base_color: str) -> trimesh.Trimesh:
+    """One vertex-colored mesh for the viewer, turned Y-up (glTF's
+    convention) so the keychain lies flat on the viewer's grid."""
+    meshes, colors = [], []
+    for color, mesh in [(base_color, base), *logos.items()]:
+        meshes.append(mesh)
+        colors.append(np.tile(np.array([*_hex_to_rgb(color), 255], dtype=np.uint8),
+                               (len(mesh.vertices), 1)))
+    combined = trimesh.util.concatenate(meshes) if len(meshes) > 1 else meshes[0].copy()
+    combined.visual.vertex_colors = np.vstack(colors)
+    combined.apply_transform(trimesh.transformations.rotation_matrix(-math.pi / 2, [1, 0, 0]))
+    return combined
+
+
 # --- export ------------------------------------------------------------------
 def _inject_3mf_colors(data: bytes, object_colors: dict[str, str]) -> bytes:
     """Give each named object a display color in the exported 3MF.
